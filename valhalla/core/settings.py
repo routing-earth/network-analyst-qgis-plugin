@@ -29,6 +29,8 @@ PROFILE_TO_OSRM_URL = {
 IGNORE_PYPI = "ignore_pypi"
 PLUGIN_VERSION = "plugin_version"
 
+RE_API_URL_DEFAULT = "https://routing-earth.com"
+
 
 @dataclass
 class ProviderSetting:
