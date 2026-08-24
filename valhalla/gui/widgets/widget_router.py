@@ -2,7 +2,7 @@ import json
 import platform
 
 from qgis.core import Qgis
-from qgis.PyQt.QtCore import QFileSystemWatcher, QProcess, QSize
+from qgis.PyQt.QtCore import QEvent, QFileSystemWatcher, QProcess, QSize
 from qgis.PyQt.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -77,9 +77,13 @@ class RouterWidget(QWidget):
         self.valhalla_service.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self.dlg_server_log = ServerLogDialog()
 
-        # watch the graph library and rebuild the combobox items on any change
+        # watch the graph library and rebuild the combobox items on any change.
+        # the watcher only fires on DIRECT children of graph_dir, so it misses a
+        # newly registered graph whose id.json is written INSIDE <name>/ (e.g. an
+        # RE download) — re-scan on dropdown open so selection is always current.
         self.graph_dir_watcher = QFileSystemWatcher([str(graph_registry.graph_dir())], self)
         self.graph_dir_watcher.directoryChanged.connect(self._refresh_graph_combo)
+        self.ui_cmb_graphs.installEventFilter(self)
         self._refresh_graph_combo()
 
         # more connections
@@ -89,6 +93,12 @@ class RouterWidget(QWidget):
         self.ui_cmb_graphs.currentTextChanged.connect(self._on_graph_changed)
         self.valhalla_service.readyReadStandardOutput.connect(self._on_server_log_ready)
         self.valhalla_service.stateChanged.connect(self._on_server_state_changed)
+
+    def eventFilter(self, obj, event):
+        # rescan right before the graph dropdown opens (see watcher note above)
+        if obj is self.ui_cmb_graphs and event.type() == QEvent.Type.MouseButtonPress:
+            self._refresh_graph_combo()
+        return super().eventFilter(obj, event)
 
     def _refresh_graph_combo(self, _path: str = ""):
         current = self.ui_cmb_graphs.currentText()
@@ -171,17 +181,6 @@ class RouterWidget(QWidget):
         else:  # Starting or Running
             self.ui_btn_server_start.setIcon(get_icon(":images/themes/default/mActionStop.svg"))
             self.ui_btn_server_start.setToolTip("Stop the local Valhalla server")
-
-        # default to QProcess.ProcessState.Running
-        msg = "Local Valhalla server started"
-        level = Qgis.MessageLevel.Info
-        if new_state == QProcess.ProcessState.NotRunning:
-            msg = "Local Valhalla server stopped"
-            level = Qgis.MessageLevel.Warning
-        elif new_state == QProcess.ProcessState.Starting:
-            return
-
-        self._parent.status_bar.pushMessage(msg, level, 3)
 
     def _on_server_log_ready(self):
         log = self.valhalla_service.readAll().data().decode()

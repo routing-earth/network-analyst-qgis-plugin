@@ -9,7 +9,7 @@ wiring only.
 
 from qgis.core import Qgis
 from qgis.gui import QgsPasswordLineEdit
-from qgis.PyQt.QtCore import QFileSystemWatcher, Qt
+from qgis.PyQt.QtCore import QFileSystemWatcher, QProcess, Qt
 from qgis.PyQt.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -64,6 +64,19 @@ class GraphManagerWidget(QWidget):
         self.graph_watcher = QFileSystemWatcher([str(graph_registry.graph_dir())], self)
         self.graph_watcher.directoryChanged.connect(self.model.refresh)
         self.model.refresh()
+
+    def shutdown(self):
+        """Kill any in-flight subprocess on plugin unload/reload so none linger
+        as a stale, 'Busy'-reading QProcess (see dock_routing.unload)."""
+        procs = (
+            self.re_ctl.proc,
+            self.local_ctl.valhalla_build_admins,
+            self.local_ctl.valhalla_build_tiles,
+        )
+        for proc in procs:
+            if proc.state() != QProcess.ProcessState.NotRunning:
+                proc.kill()
+                proc.waitForFinished(2000)
 
     # ---------------- UI assembly ----------------
 

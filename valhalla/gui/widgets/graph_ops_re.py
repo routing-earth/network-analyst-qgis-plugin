@@ -18,7 +18,8 @@ from qgis.PyQt.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
 from ...core import graph_registry
 from ...core.routing_earth import Entitlement, get_re_api_key, re_cli_args, re_process_env
-from ...core.settings import ValhallaSettings, get_settings_dir
+from ...core.settings import get_settings_dir
+from ...global_definitions import PYTHON_EXE
 
 
 class RoutingEarthController(QObject):
@@ -69,7 +70,7 @@ class RoutingEarthController(QObject):
         self._proc_buf = ""
         self._on_proc_done = on_done
         self.proc.setProcessEnvironment(re_process_env(api_key))
-        self.proc.start(ValhallaSettings().get_re_python(), args)
+        self.proc.start(str(PYTHON_EXE), args)
         self._log(f"Executing re {' '.join(args[2:])}")
         return True
 

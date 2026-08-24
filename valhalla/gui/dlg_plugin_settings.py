@@ -20,7 +20,7 @@ from qgis.PyQt.QtWidgets import (
 
 from ..core.settings import ValhallaSettings
 from ..exceptions import ValhallaCmdError
-from ..global_definitions import PYPI_PKGS, Dialogs, PyPiState
+from ..global_definitions import PYPI_PKGS, Dialogs, PyPiPkg, PyPiState
 from ..utils.resource_utils import (
     check_local_lib_version,
     check_valhalla_installation,
@@ -28,7 +28,7 @@ from ..utils.resource_utils import (
     get_icon,
     get_local_lib_version,
     get_pypi_lib_version,
-    install_pyvalhalla,
+    install_pkg,
 )
 from . import UI_RESOURCE_PATH
 from .gui_utils import add_msg_bar
@@ -112,9 +112,9 @@ class PluginSettingsDialog(QDialog, GENERATED_FORM_CLASS):
         self.ui_deps_table.setHorizontalHeaderLabels(["Package", "Installed", "Available", "Action"])
         for row_id, pkg in enumerate(PYPI_PKGS):
             # get the versions and the currently installed state
-            current_version = Version(get_local_lib_version() or "0.0.0")
+            current_version = Version(get_local_lib_version(pkg) or "0.0.0")
             pypi_version = get_pypi_lib_version(pkg)
-            installed_state = check_local_lib_version(pypi_version)
+            installed_state = check_local_lib_version(pypi_version, pkg)
             if pypi_version.base_version == "0.0.0":
                 self.status_bar.pushMessage(f"Couldn't find PyPI package {pkg.pypi_name} online.")
                 icon = ":images/themes/default/mTaskCancel.svg"
@@ -148,26 +148,23 @@ class PluginSettingsDialog(QDialog, GENERATED_FORM_CLASS):
             btn.setIcon(get_icon(icon))
             btn.setEnabled(installed_state != PyPiState.UP_TO_DATE)
             btn.setToolTip(tooltip)
-            f = partial(
-                self._on_pypi_install, f"{pkg.pypi_name}=={pypi_version.public}", installed_state
-            )
+            f = partial(self._on_pypi_install, pkg, installed_state)
             btn.clicked.connect(f)
             self.ui_deps_table.setCellWidget(row_id, 3, btn)
 
         self.ui_deps_table.resizeColumnToContents(3)
 
-    def _on_pypi_install(self, pypi_pkg: str, installed_state: PyPiState):
-        """Install the package from PyPI"""
+    def _on_pypi_install(self, pkg: PyPiPkg, installed_state: PyPiState):
+        """Install/upgrade the package (pyvalhalla or routing-earth-utils)."""
         try:
-            # in case there'll be more packages in the future, this will need to be extended
-            install_pyvalhalla(installed_state)
+            install_pkg(pkg, installed_state)
         except ValhallaCmdError as e:
             self.status_bar.pushMessage(
                 f"Couldn't install the dependencies:\n{e}", Qgis.MessageLevel.Critical, 0
             )
             return
 
-        self.status_bar.pushMessage(f"Successfully installed/upgraded package: {pypi_pkg}")
+        self.status_bar.pushMessage(f"Successfully installed/upgraded package: {pkg.pypi_name}")
         # update the table with the new info
         self.setupDepsTable()
         QApplication.processEvents()

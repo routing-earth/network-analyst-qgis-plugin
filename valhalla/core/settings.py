@@ -8,7 +8,7 @@ from qgis.core import QgsApplication, QgsSettings
 from qgis.PyQt.QtCore import QSettings
 
 from .. import PLUGIN_NAME
-from ..global_definitions import PYTHON_EXE, Dialogs, RouterType
+from ..global_definitions import Dialogs, RouterType
 from ..gui.ui_definitions import PluginSettingsDlgElems
 from ..utils.misc_utils import str_to_bool
 
@@ -210,18 +210,3 @@ class ValhallaSettings(QgsSettings):
 
     def set_re_splitter_state(self, state: bytes):
         self.set(Dialogs.SETTINGS, "re_splitter_state", state)
-
-    # TODO: remove once routing-earth-utils is installed from PyPI by the
-    #   plugin itself (like pyvalhalla) — then the subprocess python is known
-    #   and this dev-only escape hatch goes away
-    def get_re_python(self) -> str:
-        """
-        The python exe running the routing-earth-utils CLI subprocess. Inside
-        QGIS, PATH is not the user's shell PATH — a bare "python3" (the
-        default) may resolve to a python without routing-earth-utils
-        installed; this setting points at the right one (e.g. a venv's).
-        """
-        return self.get(Dialogs.SETTINGS, "re_python") or str(PYTHON_EXE)
-
-    def set_re_python(self, python_exe: str):
-        self.set(Dialogs.SETTINGS, "re_python", python_exe)

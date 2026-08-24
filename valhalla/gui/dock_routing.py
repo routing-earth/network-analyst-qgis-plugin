@@ -560,6 +560,12 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
             self.router_widget._on_server_stop()
             service.waitForFinished(2000)
 
+        # kill any in-flight RE / graph-build subprocess so a reload doesn't
+        # leave a lingering QProcess whose stale state reads as "Busy"
+        graph_widget = getattr(getattr(self.router_widget, "settings_dlg", None), "graph_widget", None)
+        if graph_widget is not None:
+            graph_widget.shutdown()
+
         try:
             self.iface.mapCanvas().contextMenuAboutToShow.disconnect(self._populate_canvas_menu)
         except TypeError:

@@ -163,12 +163,16 @@ Behavior notes:
   the Last-diff column) + OSM age, with a download button → sized confirm → seed into
   `<graph_dir>/<scope>_<cadence>/`. Wildcard `*` shows as-is (no size; prompts for a region on
   download). Available rows are in-memory only.
-- **Dev-env expectation (TEMPORARY):** `routing-earth-utils` must be installed in the
-  python the `re_python` setting points to (default platform `PYTHON_EXE`; **PATH inside
-  QGIS is not the shell PATH**, so it points at Nils's `global_venv/bin/python3`).
-  `re_python` is marked for deletion (TODO in `settings.py`) — plan: install from PyPI via
-  the plugin like pyvalhalla. Profile pyvalhalla dir is prepended to the subprocess
-  PYTHONPATH so the right `valhalla` wins.
+- **Install (like pyvalhalla):** the plugin installs `routing-earth-utils` itself from the
+  deps table (`dlg_plugin_settings` → `install_pkg` → `install_routing_earth_utils` in
+  `utils/resource_utils.py`). Unlike pyvalhalla (a self-contained wheel that's just unzipped)
+  re-utils has deps, so it's `pip install --target <profile>/routing_earth_utils`: re-utils
+  `--no-deps` (reuse the unpacked pyvalhalla) + `cryptography` (+ `backports.zstd` on py<3.14).
+  **On test.pypi for now** → `--index-url test.pypi --extra-index-url pypi.org` so deps
+  resolve from real PyPI; version check hits test.pypi's JSON API (`PyPiPkg.json_url`). The
+  subprocess runs under `PYTHON_EXE` with `re_utils_root_dir()` + pyvalhalla dir prepended to
+  PYTHONPATH (`re_process_env`, `os.pathsep`-joined — Windows-safe). The old `re_python`
+  setting is gone.
 - **Auth:** API key in the QGIS auth database (`APIHeader` config, id in `re_authcfg`);
   passed via env `ROUTING_EARTH_API_KEY`, never argv/QSettings. API origin override:
   `re_api_url` (default https://routing-earth.com).

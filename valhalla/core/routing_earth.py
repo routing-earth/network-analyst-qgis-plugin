@@ -5,16 +5,17 @@ and the entitlements HTTP call. Registry/entry concerns live in
 core/graph_registry.py (which this module may be imported alongside, never
 the reverse).
 
-The client CLI runs as a subprocess (``python3 -m routing_earth_utils.cli``):
+The client CLI runs as a subprocess (``PYTHON_EXE -m routing_earth_utils.cli``):
 inside QGIS this plugin's own package is named ``valhalla`` and shadows
 pyvalhalla in ``sys.modules``, so ``routing_earth_utils`` (which imports
-``valhalla.baldr``) can never be imported in-process. ``routing-earth-utils``
-must be installed in the python the ``re_python`` setting points to (no
-plugin-side install wiring for now); the profile-managed pyvalhalla dir is
-prepended to PYTHONPATH so the right ``valhalla`` wins in the subprocess.
+``valhalla.baldr``) can never be imported in-process. The plugin installs
+routing-earth-utils + its deps into ``re_utils_root_dir()`` (utils/
+resource_utils.py, like pyvalhalla); that dir and the pyvalhalla dir are
+prepended to the subprocess PYTHONPATH so the right packages win.
 """
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
@@ -59,6 +60,12 @@ def pyvalhalla_root_dir() -> Path:
     return get_settings_dir().joinpath("pyvalhalla")
 
 
+def re_utils_root_dir() -> Path:
+    """The dir holding the pip-installed routing-earth-utils + its deps
+    (prepended to the ``re`` subprocess PYTHONPATH; holds ``routing_earth_utils/``)."""
+    return get_settings_dir().joinpath("routing_earth_utils")
+
+
 def fetch_entitlements() -> List[Entitlement]:
     """
     Everything the stored API key may resolve, straight from the HTTP API — no
@@ -101,16 +108,22 @@ def re_cli_args(cmd: str, tar_path: Path, *extra_args: str) -> List[str]:
 
 def re_process_env(api_key: str) -> QProcessEnvironment:
     """
-    The subprocess environment: system env with our PYTHONPATH prepended
-    (profile pyvalhalla must win over any ambient ``valhalla`` package) and
-    the API key injected — env, never argv (visible in ps) or QSettings.
+    The subprocess environment: system env with our plugin-managed dirs
+    prepended to PYTHONPATH (routing_earth_utils + its deps, then pyvalhalla —
+    both must win over any ambient install) and the API key injected via env,
+    never argv (visible in ps) or QSettings. Set on the child only, never the
+    shell; ``os.pathsep`` keeps it Windows-correct.
     """
     env = QProcessEnvironment.systemEnvironment()
+    paths = []
+    if re_utils_root_dir().joinpath("routing_earth_utils").is_dir():
+        paths.append(str(re_utils_root_dir()))
     if pyvalhalla_root_dir().joinpath("valhalla").is_dir():
-        python_path = str(pyvalhalla_root_dir())
+        paths.append(str(pyvalhalla_root_dir()))
+    if paths:
         if existing := env.value("PYTHONPATH"):
-            python_path = f"{python_path}:{existing}"
-        env.insert("PYTHONPATH", python_path)
+            paths.append(existing)
+        env.insert("PYTHONPATH", os.pathsep.join(paths))
     env.insert("ROUTING_EARTH_API_KEY", api_key)
 
     return env
