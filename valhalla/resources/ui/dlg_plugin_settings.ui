@@ -31,12 +31,9 @@
        <item row="0" column="1">
         <layout class="QHBoxLayout" name="horizontalLayout">
          <item>
-          <widget class="QgsFileWidget" name="ui_binary_path">
+          <widget class="QgsFileWidget" name="ui_binary_path" native="true">
            <property name="toolTip">
             <string>Change the binary directory for Valhalla</string>
-           </property>
-           <property name="storageMode">
-            <enum>QgsFileWidget::GetDirectory</enum>
            </property>
           </widget>
          </item>
@@ -55,7 +52,7 @@
       </layout>
      </item>
      <item>
-      <widget class="QGroupBox" name="ui_deps_group">
+      <widget class="QgsCollapsibleGroupBox" name="ui_deps_group">
        <property name="title">
         <string>Dependencies</string>
        </property>
@@ -123,6 +120,12 @@
    <class>QgsFileWidget</class>
    <extends>QWidget</extends>
    <header>qgsfilewidget.h</header>
+  </customwidget>
+  <customwidget>
+   <class>QgsCollapsibleGroupBox</class>
+   <extends>QGroupBox</extends>
+   <header>qgscollapsiblegroupbox.h</header>
+   <container>1</container>
   </customwidget>
  </customwidgets>
  <resources/>

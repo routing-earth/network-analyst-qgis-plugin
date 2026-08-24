@@ -8,7 +8,7 @@ from qgis.core import QgsApplication, QgsSettings
 from qgis.PyQt.QtCore import QSettings
 
 from .. import PLUGIN_NAME
-from ..global_definitions import Dialogs, RouterType
+from ..global_definitions import PYTHON_EXE, Dialogs, RouterType
 from ..gui.ui_definitions import PluginSettingsDlgElems
 from ..utils.misc_utils import str_to_bool
 
@@ -16,7 +16,6 @@ DEFAULTS = {
     PluginSettingsDlgElems.VALHALLA_HTTP_URL: "https://valhalla1.openstreetmap.de",
     PluginSettingsDlgElems.VALHALLA_HTTP_PARAM: "access_token",
     PluginSettingsDlgElems.DEBUG: "False",
-    PluginSettingsDlgElems.SETTINGS_SPLITTER_STATE: "",
     # PluginSettingsDlgElems.SHOP_HTTP_URL: "http://localhost:8080",
 }
 
@@ -28,6 +27,8 @@ PROFILE_TO_OSRM_URL = {
 
 IGNORE_PYPI = "ignore_pypi"
 PLUGIN_VERSION = "plugin_version"
+
+RE_API_URL_DEFAULT = "https://routing-earth.com"
 
 
 @dataclass
@@ -59,8 +60,6 @@ DEFAULT_PROVIDERS = [
     ProviderSetting("FOSSGIS", "https://valhalla1.openstreetmap.de", "", "access_key"),  # auth_key
     ProviderSetting("localhost", "http://localhost:8002", "", ""),  # auth_key
 ]
-
-DEFAULT_GRAPH_DIR: Path = get_settings_dir().joinpath("graph_dir")
 
 
 class ValhallaSettings(QgsSettings):
@@ -162,23 +161,6 @@ class ValhallaSettings(QgsSettings):
 
         return current
 
-    def get_graph_dir(self) -> Optional[Path]:
-        """
-        Returns the path to the graph directory from the settings.
-        """
-        graph_dir = self.get(Dialogs.SETTINGS, "graph_dir")
-        return Path(graph_dir) if graph_dir else None
-
-    def set_graph_dir(self, graph_dir: Union[Path, str]):
-        """
-        Sets the path to the graph directory from the settings.
-        """
-        self.set(
-            Dialogs.SETTINGS,
-            "graph_dir",
-            str(graph_dir.resolve()) if isinstance(graph_dir, Path) else graph_dir,
-        )
-
     def get_binary_dir(self) -> Optional[Path]:
         """
         Returns the path to the Valhalla binaries.
@@ -196,8 +178,50 @@ class ValhallaSettings(QgsSettings):
             str(binary_dir.resolve()) if isinstance(binary_dir, Path) else binary_dir,
         )
 
-    def get_settings_splitter_state(self) -> bytes:
-        return self.get(Dialogs.SETTINGS, PluginSettingsDlgElems.SETTINGS_SPLITTER_STATE)
+    def get_graph_dir(self) -> Path:
+        """The graph library dir — the sole source of truth for local/RE graphs.
+        Each graph is a self-contained subdir ``<graph_dir>/<name>/`` (id.json +
+        its data). User-relocatable; defaults under the profile."""
+        raw = self.get(Dialogs.SETTINGS, "graph_dir")
+        return Path(raw) if raw else get_settings_dir().joinpath("graph_dir")
 
-    def set_settings_splitter_state(self, state: bytes):
-        self.set(Dialogs.SETTINGS, PluginSettingsDlgElems.SETTINGS_SPLITTER_STATE, state)
+    def set_graph_dir(self, graph_dir: Union[Path, str]):
+        self.set(
+            Dialogs.SETTINGS,
+            "graph_dir",
+            str(graph_dir.resolve()) if isinstance(graph_dir, Path) else graph_dir,
+        )
+
+    def get_re_authcfg(self) -> str:
+        """The QGIS auth database config id holding the routing.earth API key."""
+        return self.get(Dialogs.SETTINGS, "re_authcfg") or ""
+
+    def set_re_authcfg(self, authcfg: str):
+        self.set(Dialogs.SETTINGS, "re_authcfg", authcfg)
+
+    def get_re_api_url(self) -> str:
+        return self.get(Dialogs.SETTINGS, "re_api_url") or RE_API_URL_DEFAULT
+
+    def set_re_api_url(self, url: str):
+        self.set(Dialogs.SETTINGS, "re_api_url", url)
+
+    def get_re_splitter_state(self) -> bytes:
+        return self.get(Dialogs.SETTINGS, "re_splitter_state")
+
+    def set_re_splitter_state(self, state: bytes):
+        self.set(Dialogs.SETTINGS, "re_splitter_state", state)
+
+    # TODO: remove once routing-earth-utils is installed from PyPI by the
+    #   plugin itself (like pyvalhalla) — then the subprocess python is known
+    #   and this dev-only escape hatch goes away
+    def get_re_python(self) -> str:
+        """
+        The python exe running the routing-earth-utils CLI subprocess. Inside
+        QGIS, PATH is not the user's shell PATH — a bare "python3" (the
+        default) may resolve to a python without routing-earth-utils
+        installed; this setting points at the right one (e.g. a venv's).
+        """
+        return self.get(Dialogs.SETTINGS, "re_python") or str(PYTHON_EXE)
+
+    def set_re_python(self, python_exe: str):
+        self.set(Dialogs.SETTINGS, "re_python", python_exe)

@@ -4,7 +4,7 @@ from qgis.core import QgsProject, QgsVectorLayer, QgsWkbTypes
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtTest import QTest
 
-from valhalla.core.settings import DEFAULT_GRAPH_DIR, ValhallaSettings, get_settings_dir
+from valhalla.core.settings import ValhallaSettings, get_settings_dir
 
 from ...constants import WAYPOINTS_4326
 from ...utilities import get_qgis_app
@@ -91,7 +91,7 @@ class TestRoutingDialog(unittest.TestCase):
 
         self.assertTrue(settings_ini.exists())
         self.assertEqual(len(ValhallaSettings().get_providers(RouterType.VALHALLA)), 2)
-        self.assertEqual(ValhallaSettings().get_graph_dir(), DEFAULT_GRAPH_DIR)
+        self.assertTrue(get_settings_dir().joinpath("graphs").is_dir())
         self.assertEqual(ValhallaSettings().get_binary_dir(), get_default_valhalla_binary_dir())
 
     def test_graph_extent_fossgis(self):

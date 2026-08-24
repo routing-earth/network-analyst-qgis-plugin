@@ -18,6 +18,8 @@ from qgis.core import (  # noqa: F811
 )
 from qgis.gui import QgisInterface, QgsDockWidget
 from qgis.PyQt import uic
+from qgis.PyQt.QtCore import QProcess, Qt, QTimer
+from qgis.PyQt.QtGui import QColor, QIcon, QPainter, QPixmap
 from qgis.PyQt.QtWidgets import (
     QAction,
     QLineEdit,
@@ -29,9 +31,9 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
+from ..core import graph_registry
 from ..core.results_factory import ResultsFactory
 from ..core.settings import (
-    DEFAULT_GRAPH_DIR,
     DEFAULT_PROVIDERS,
     ProviderSetting,
     ValhallaSettings,
@@ -94,22 +96,20 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
 
         # make sure we have some default settings:
         # - at least one remote HTTP API URL and localhost
-        # - a default graph dir in the settings
         # - the default binary path
+        # - the graph registry (+ one-shot legacy migration)
         # - a valhalla.json we can overwrite with the current graph settings
         settings = ValhallaSettings()
         if not settings.get_providers(RouterType.VALHALLA):
             for prov in DEFAULT_PROVIDERS:
                 settings.set_provider(RouterType.VALHALLA.lower(), prov)
-        if not settings.get_graph_dir():
-            settings.set_graph_dir(DEFAULT_GRAPH_DIR)
         if not settings.get_binary_dir():
             bin_dir = get_default_valhalla_binary_dir()
             bin_dir.parent.parent.mkdir(exist_ok=True, parents=True)
             settings.set_binary_dir(bin_dir)
 
-        # graph_dir needs to exist
-        ValhallaSettings().get_graph_dir().mkdir(exist_ok=True, parents=True)
+        # ensure the graph library dir exists (sole source of truth for graphs)
+        graph_registry.graph_dir()
 
         # add custom widgets to this dialog
         self.router_widget = RouterWidget(self)
@@ -128,6 +128,16 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         )
 
         self._on_profile_change()
+
+        # "on air" blinker: while the local valhalla server runs, the stop
+        # button's black-square icon pulses red at a fixed cadence
+        self._blink_on = False
+        self._blink_timer = QTimer(self)
+        self._blink_timer.setInterval(750)
+        self._blink_timer.timeout.connect(self._on_server_blink)
+        # no valhalla_service on Windows (no local server support)
+        if hasattr(self.router_widget, "valhalla_service"):
+            self.router_widget.valhalla_service.stateChanged.connect(self._on_server_state_changed)
 
         # connections
         self.menu_widget.currentRowChanged["int"].connect(self._on_menu_change)
@@ -370,6 +380,45 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
 
         self.setWindowTitle(title)
 
+    def _on_server_state_changed(self, new_state: QProcess.ProcessState):
+        running = new_state != QProcess.ProcessState.NotRunning
+        if running:
+            self._blink_timer.start()
+        else:
+            self._blink_timer.stop()
+            self._blink_on = False
+            # clear the red tint back to the run icon (router widget owns the
+            # button; both handlers fire on stateChanged, order not guaranteed)
+            self.router_widget.ui_btn_server_start.setIcon(
+                get_icon(":images/themes/default/mActionStart.svg")
+            )
+
+    def _on_server_blink(self):
+        """The "on air" blink: pulse the stop button's black square icon red."""
+        self._blink_on = not self._blink_on
+        icon = (
+            self._red_stop_icon()
+            if self._blink_on
+            else get_icon(":images/themes/default/mActionStop.svg")
+        )
+        self.router_widget.ui_btn_server_start.setIcon(icon)
+
+    def _red_stop_icon(self) -> QIcon:
+        """A red-tinted copy of the stop icon (cached), matching the button size."""
+        if getattr(self, "_red_stop_icon_cache", None) is None:
+            btn = self.router_widget.ui_btn_server_start
+            size = btn.iconSize()
+            src = get_icon(":images/themes/default/mActionStop.svg").pixmap(size)
+            tinted = QPixmap(src.size())
+            tinted.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(tinted)
+            painter.drawPixmap(0, 0, src)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+            painter.fillRect(tinted.rect(), QColor("#ff2222"))
+            painter.end()
+            self._red_stop_icon_cache = QIcon(tinted)
+        return self._red_stop_icon_cache
+
     def _on_about_click(self):
         about = AboutDialog(self)
         if exc_msg := about.exception_msg:
@@ -503,6 +552,14 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         routing_menu.addAction(clear_pts)
 
     def unload(self):
+        # don't leave an orphaned valhalla server behind on plugin
+        # reload/unload or QGIS shutdown (no valhalla_service on Windows);
+        # wait briefly so the port is free again for a reloaded instance
+        service = getattr(self.router_widget, "valhalla_service", None)
+        if service is not None and service.state() != QProcess.ProcessState.NotRunning:
+            self.router_widget._on_server_stop()
+            service.waitForFinished(2000)
+
         try:
             self.iface.mapCanvas().contextMenuAboutToShow.disconnect(self._populate_canvas_menu)
         except TypeError:
