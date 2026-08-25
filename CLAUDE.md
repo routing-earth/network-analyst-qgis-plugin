@@ -6,12 +6,21 @@ Notes for future Claude sessions working in this repo. Keep terse and current �
 
 QGIS plugin for the [Valhalla routing engine](https://github.com/valhalla/valhalla). Provides routing, isochrones, matrix, map-match, elevation, expansion, and TSP — both as interactive map tools and Processing algorithms — for car/bike/pedestrian/truck/motorbike profiles. Talks to remote Valhalla HTTP servers (FOSSGIS public, custom URLs) or runs Valhalla locally via the [`pyvalhalla`](https://pypi.org/project/pyvalhalla/) Python package (Linux/macOS only — Windows is HTTP-only).
 
+### Branding: "Valhalla" → "Network Analyst" (v6.0.0 rename)
+
+The plugin's **display name** is **Network Analyst** (`metadata.txt` `name=`). Only the label changed — the **identity did not**:
+
+- The plugin **folder / Python package** stays `valhalla/` (it's the plugins.qgis.org id AND the package that deliberately shadows pyvalhalla — never rename it).
+- The Processing **provider `id()` is hardcoded `"valhalla"`** (`processing/provider.py`), decoupled from the display name, so saved Processing models referencing `valhalla:route` etc. keep working. `provider.name()` follows the display name.
+- `PLUGIN_NAME` (`__init__.py`) is derived from `metadata.txt` `name=`; all user-facing display strings (dock titles, canvas submenu, About title, toolbar/menu) reference it — a future rename is again just the metadata line. "Valhalla" the **engine** name legitimately stays in URLs, `valhalla.json`, config, and class names.
+- On first startup after upgrading past 6.0.0 (or a fresh install), `gui/dlg_rebrand_notice.py` shows a one-shot "Valhalla is now Network Analyst" dialog (old + new logos inline), gated on a `last_seen_version` setting. Old logo preserved as `resources/icons/valhalla_old.svg`; `valhalla_logo.svg` is now the new routing.earth logo.
+
 ## Branches & QGIS/PyQt strategy
 
 - **`master`**: development branch for QGIS 4.x / PyQt6. **This is where new work lives.**
 - **`qgis-v3`**: maintenance branch for QGIS 3.x / PyQt5.
 - (`qgis-v4` may exist transiently as a working branch before merging into master — treat `master` as canonical going forward.)
-- `metadata.txt` on the v4 line declares `qgisMinimumVersion=4.0`, `qgisMaximumVersion=4.99`, `version=5.0.0`.
+- `metadata.txt` on the v4 line declares `qgisMinimumVersion=4.0`, `qgisMaximumVersion=4.99`, `version=6.0.0` (the Network Analyst rename; see Branding above).
 - The `qgis.PyQt.*` compatibility layer (provided by QGIS) abstracts most PyQt version differences, but **not all**: enum scoping (`Qt.LeftButton` vs `Qt.MouseButton.LeftButton`), `QFileSystemModel` location (QtWidgets in PyQt5 → QtGui in PyQt6), `QFileDialog` option flags, etc.
 
 ## Repository layout
