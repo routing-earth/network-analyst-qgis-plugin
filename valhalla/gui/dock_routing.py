@@ -31,6 +31,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
+from .. import PLUGIN_NAME
 from ..core import graph_registry
 from ..core.results_factory import ResultsFactory
 from ..core.settings import (
@@ -164,7 +165,7 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         self.menu_widget.item(6).setIcon(get_icon("height_icon.svg"))
         self.menu_widget.setCurrentRow(0)
 
-        self.setWindowTitle("Valhalla - Routing")
+        self.setWindowTitle(f"{PLUGIN_NAME} - Routing")
         self.ui_debug_btn.setChecked(settings.is_debug())
 
         self.setWidget(widget)
@@ -360,7 +361,7 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
     def _on_menu_change(self, menu_index: int):
         """Only changes the window title"""
 
-        title = "Valhalla - "
+        title = f"{PLUGIN_NAME} - "
         if menu_index == 0:
             title += "Routing"
         elif menu_index == 1:
@@ -528,7 +529,7 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         """Executed on every right-click in the map canvas"""
         map_pt = event.mapPoint()
 
-        routing_menu = menu.addMenu("Valhalla")
+        routing_menu = menu.addMenu(PLUGIN_NAME)
         routing_menu.setIcon(get_icon("valhalla_logo.svg"))
 
         origin = QAction(get_icon("origin.svg"), "Add waypoint", menu)

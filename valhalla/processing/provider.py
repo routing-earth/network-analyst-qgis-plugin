@@ -127,8 +127,12 @@ class ValhallaProvider(QgsProcessingProvider):
         Returns the unique provider id, used for identifying the provider. This
         string should be a unique, short, character only string, eg "qgis" or
         "gdal". This string should not be localised.
+
+        Deliberately hardcoded (NOT derived from the display name): the id is the
+        stable key for algorithm ids (``valhalla:route`` etc.) referenced by saved
+        Processing models. Renaming the plugin's display name must not break those.
         """
-        return PLUGIN_NAME.strip().lower().replace(" ", "_")
+        return "valhalla"
 
     def name(self):
         """

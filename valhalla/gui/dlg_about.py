@@ -4,7 +4,7 @@ from typing import Optional
 from qgis.PyQt import uic
 from qgis.PyQt.QtWidgets import QDialog
 
-from .. import __version__
+from .. import PLUGIN_NAME, __version__
 from ..core.graph_registry import discover, humanize_timestamp
 from ..utils.http_utils import get_status_response
 from . import UI_RESOURCE_PATH
@@ -17,6 +17,7 @@ class AboutDialog(QDialog, GENERATED_FORM_CLASS):
         super().__init__(parent=parent)
         self._parent = parent
         self.setupUi(self)
+        self.setWindowTitle(f"About {PLUGIN_NAME}")
         self.ui_plugin_version_text.setText(__version__)
 
         self.exception_msg: Optional[str] = None

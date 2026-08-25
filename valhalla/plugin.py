@@ -54,7 +54,7 @@ class ValhallaPlugin:
         self.menu.setIcon(valhalla_icon)
 
         for title, callback, icon in (
-            ("Routing Functions", self.open_routing_dlg, valhalla_icon),
+            ("Network Analyst", self.open_routing_dlg, valhalla_icon),
         ):
             self.add_action(icon, title, callback)
 
