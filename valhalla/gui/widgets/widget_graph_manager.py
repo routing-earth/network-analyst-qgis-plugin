@@ -91,8 +91,12 @@ class GraphManagerWidget(QWidget):
             lambda: ValhallaSettings().set_re_api_url(self.ui_text_api_url.text().strip())
         )
 
+        api_key_label = QLabel('<a href="https://routing-earth.com/settings/api-keys">API key</a>', self)
+        api_key_label.setOpenExternalLinks(True)
+        api_key_label.setToolTip("Manage your routing.earth API keys")
+
         key_row = QHBoxLayout()
-        key_row.addWidget(QLabel("API key", self))
+        key_row.addWidget(api_key_label)
         key_row.addWidget(self.ui_text_api_key, 2)
         key_row.addWidget(QLabel("URL", self))
         key_row.addWidget(self.ui_text_api_url, 1)
@@ -157,9 +161,9 @@ class GraphManagerWidget(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addLayout(key_row)
         layout.addLayout(btn_row)
         layout.addWidget(self.splitter)
+        layout.addLayout(key_row)
 
     def _setup_menu(self):
         """Update-from-routing.earth on top, the local build flows behind an
