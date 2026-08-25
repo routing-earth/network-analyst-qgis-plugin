@@ -32,6 +32,7 @@ class RoutingEarthController(QObject):
         status_bar,
         refresh: Callable[[], None],
         confirm_replace: Callable[[str], bool],
+        on_synced: Callable[[str], None] = lambda _name: None,
     ):
         super().__init__(parent_widget)
         self._widget = parent_widget  # dialog parenting only
@@ -39,6 +40,7 @@ class RoutingEarthController(QObject):
         self._status_bar = status_bar
         self._refresh = refresh
         self._confirm_replace = confirm_replace
+        self._on_synced = on_synced
 
         self._proc_buf = ""
         self._on_proc_done: Optional[Callable[[int], None]] = None
@@ -160,9 +162,7 @@ class RoutingEarthController(QObject):
             )
 
         if self._run_re(re_cli_args("init", tar_path, "--scope", scope, "--cadence", cadence), done):
-            self._status_bar.pushInfo(
-                "", f"Started seeding {scope}/{cadence} — this can take a while..."
-            )
+            self._status_bar.pushInfo("", f"Started seeding {scope}/{cadence}, this can take a while...")
 
     def _confirm_download(self, scope: str, cadence: str, ent: Entitlement) -> bool:
         dl = graph_registry.human_size(ent.compressed_size_bytes)
@@ -177,7 +177,7 @@ class RoutingEarthController(QObject):
             QMessageBox.question(
                 self._widget,
                 "Download graph package",
-                f"Download {scope}/{cadence}{size_note}?\nThis can take a while.",
+                f"Download {scope}/{cadence}{size_note}?\n\nThis can take a while.",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.Yes,
             )
@@ -242,12 +242,9 @@ class RoutingEarthController(QObject):
                 **self._diff_from_log(),
             )
             self._refresh()
-            self._status_bar.pushMessage(
-                f"Successfully synced {entry.name}", Qgis.MessageLevel.Success, 3
-            )
+            self._on_synced(entry.name)
 
-        if self._run_re(re_cli_args("sync", entry.tar_path), done):
-            self._status_bar.pushInfo("", f"Started syncing {entry.name}...")
+        self._run_re(re_cli_args("sync", entry.tar_path), done)
 
     def status_all(self, entries: List[graph_registry.GraphEntry]):
         """Checks every managed package against the resolver, one subprocess at a time."""

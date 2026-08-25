@@ -5,6 +5,7 @@ from qgis.PyQt import uic
 from qgis.PyQt.QtWidgets import QDialog
 
 from .. import __version__
+from ..core.graph_registry import discover, humanize_timestamp
 from ..utils.http_utils import get_status_response
 from . import UI_RESOURCE_PATH
 
@@ -22,6 +23,7 @@ class AboutDialog(QDialog, GENERATED_FORM_CLASS):
         self.buttonBox.accepted.connect(self.accept)
         self.ui_valhalla_version_text.setText("NA")
         self.ui_data_age_text.setText("NA")
+        self._set_osm_data_age()
         try:
             result = get_status_response(self._parent.router_widget.provider.url)
             valhalla_version: str = result["version"]
@@ -34,3 +36,18 @@ class AboutDialog(QDialog, GENERATED_FORM_CLASS):
             )
         except Exception as e:
             self.exception_msg = str(e)
+
+    def _set_osm_data_age(self):
+        """OSM extract age of the graph currently selected for the local
+        server. Only routing.earth graphs record it (in their ``routing_earth``
+        block); locally built graphs (From PBF/Tar/URL) don't, so this stays
+        'NA' for them."""
+        self.ui_osm_data_text.setText("NA")
+        try:
+            name = self._parent.router_widget.ui_cmb_graphs.currentText()
+        except AttributeError:
+            return
+        entry = next((e for e in discover() if e.name == name), None)
+        if entry and entry.osm_data_timestamp:
+            ts = entry.osm_data_timestamp
+            self.ui_osm_data_text.setText(f"{humanize_timestamp(ts)} ({ts})")

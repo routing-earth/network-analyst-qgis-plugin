@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>370</width>
-    <height>203</height>
+    <height>230</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -99,6 +99,26 @@
       <widget class="QLabel" name="ui_data_age_text">
        <property name="text">
         <string>data age string</string>
+       </property>
+       <property name="textFormat">
+        <enum>Qt::PlainText</enum>
+       </property>
+       <property name="textInteractionFlags">
+        <set>Qt::TextSelectableByKeyboard|Qt::TextSelectableByMouse</set>
+       </property>
+      </widget>
+     </item>
+     <item row="4" column="0">
+      <widget class="QLabel" name="label_6">
+       <property name="text">
+        <string>OSM data</string>
+       </property>
+      </widget>
+     </item>
+     <item row="4" column="1">
+      <widget class="QLabel" name="ui_osm_data_text">
+       <property name="text">
+        <string>osm data string</string>
        </property>
        <property name="textFormat">
         <enum>Qt::PlainText</enum>

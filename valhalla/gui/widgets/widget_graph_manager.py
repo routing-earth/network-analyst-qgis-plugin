@@ -9,7 +9,7 @@ wiring only.
 
 from qgis.core import Qgis
 from qgis.gui import QgsPasswordLineEdit
-from qgis.PyQt.QtCore import QFileSystemWatcher, QProcess, Qt
+from qgis.PyQt.QtCore import QFileSystemWatcher, QProcess, Qt, QTimer
 from qgis.PyQt.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -49,7 +49,12 @@ class GraphManagerWidget(QWidget):
         self._setup_ui()
 
         self.re_ctl = RoutingEarthController(
-            self, self.log_widget.append, parent.status_bar, self.model.refresh, self._confirm_replace
+            self,
+            self.log_widget.append,
+            parent.status_bar,
+            self.model.refresh,
+            self._confirm_replace,
+            self._flash_action_success,
         )
         self.local_ctl = LocalGraphController(
             self, self.log_widget.append, parent.status_bar, self.model.refresh, self._confirm_replace
@@ -280,6 +285,18 @@ class GraphManagerWidget(QWidget):
     def _on_sync(self, name: str):
         if (entry := self.model.entry_by_name(name)) is not None and entry.is_managed:
             self.re_ctl.sync(entry)
+
+    def _flash_action_success(self, name: str):
+        """On a successful sync, swap the row's action button for a green
+        checkmark for 2s (in place of a status-bar message), then restore it."""
+        row = next((i for i, e in enumerate(self.model.entries) if e.name == name), None)
+        if row is None:
+            return
+        check = QLabel()
+        check.setPixmap(get_icon(":images/themes/default/mIconSuccess.svg").pixmap(16, 16))
+        check.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.ui_table.setIndexWidget(self.model.index(row, ACTION_COL), check)
+        QTimer.singleShot(2000, self._rebuild_action_widgets)
 
     # ---------------- toolbar ops ----------------
 
