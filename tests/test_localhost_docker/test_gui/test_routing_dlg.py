@@ -89,7 +89,7 @@ class TestRoutingDialog(unittest.TestCase):
 
         self.assertTrue(settings_ini.exists())
         self.assertEqual(len(ValhallaSettings().get_providers(RouterType.VALHALLA)), 2)
-        self.assertTrue(get_settings_dir().joinpath("graphs").is_dir())
+        self.assertTrue(get_settings_dir().joinpath("graph_dir").is_dir())
         self.assertEqual(ValhallaSettings().get_binary_dir(), get_default_valhalla_binary_dir())
 
     def test_graph_extent_fossgis(self):
