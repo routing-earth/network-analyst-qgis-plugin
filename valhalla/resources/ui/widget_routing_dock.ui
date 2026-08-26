@@ -672,22 +672,6 @@ QListWidget::item::selected {
             </widget>
            </item>
            <item>
-            <widget class="QToolButton" name="ui_debug_btn">
-             <property name="text">
-              <string/>
-             </property>
-             <property name="iconSize">
-              <size>
-               <width>32</width>
-               <height>32</height>
-              </size>
-             </property>
-             <property name="checkable">
-              <bool>true</bool>
-             </property>
-            </widget>
-           </item>
-           <item>
             <spacer name="horizontalSpacer_6">
              <property name="orientation">
               <enum>Qt::Horizontal</enum>
@@ -701,12 +685,12 @@ QListWidget::item::selected {
             </spacer>
            </item>
            <item>
-            <widget class="QToolButton" name="ui_about_btn">
+            <widget class="QToolButton" name="ui_re_btn">
+             <property name="toolTip">
+              <string>routing.earth QGIS plugin</string>
+             </property>
              <property name="text">
               <string/>
-             </property>
-             <property name="icon">
-              <iconset theme=":images/themes/default/mActionPropertiesWidget.svg"/>
              </property>
              <property name="iconSize">
               <size>

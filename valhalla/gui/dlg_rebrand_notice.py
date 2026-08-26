@@ -24,12 +24,12 @@ REBRAND_VERSION = (6, 0, 0)
 LAST_SEEN_KEY = "last_seen_version"
 
 
-def _as_tuple(version: str) -> tuple:
+def _as_zero_tuple(version: str) -> tuple:
     """Best-effort dotted-version → int tuple; empty/garbage sorts as oldest."""
     try:
         return tuple(int(p) for p in str(version).split(".")[:3])
     except (ValueError, AttributeError):
-        return ()
+        return (0, 0, 0)
 
 
 def maybe_show_rebrand_notice(parent=None) -> None:
@@ -38,7 +38,7 @@ def maybe_show_rebrand_notice(parent=None) -> None:
     settings = ValhallaSettings()
     last_seen = settings.get(Dialogs.SETTINGS, LAST_SEEN_KEY)
 
-    if _as_tuple(last_seen) < REBRAND_VERSION:
+    if _as_zero_tuple(last_seen) < REBRAND_VERSION:
         RebrandNoticeDialog(parent).exec()
 
     settings.set(Dialogs.SETTINGS, LAST_SEEN_KEY, __version__)

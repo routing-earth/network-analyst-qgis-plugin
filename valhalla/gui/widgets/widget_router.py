@@ -312,6 +312,10 @@ class RouterWidget(QWidget):
                 ":images/themes/default/propertyicons/layerconfiguration.svg",
                 "Configure the local server",
             ),
+            RouterWidgetElems.SERVER_INFO: (
+                ":images/themes/default/mActionPropertiesWidget.svg",
+                "Show graph & server info",
+            ),
             RouterWidgetElems.SERVER_LOG: (
                 ":images/themes/default/mMessageLog.svg",
                 "View local server logs",

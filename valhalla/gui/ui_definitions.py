@@ -27,4 +27,5 @@ class RouterWidgetElems(str, Enum):
     SERVER_START = "ui_btn_server_start"  # toggles start/stop with the process state
     SERVER_LOG = "ui_btn_server_log"
     SERVER_CONF = "ui_btn_server_conf"
+    SERVER_INFO = "ui_btn_server_info"  # graph/version info dialog (was ui_about_btn)
     SERVER_GRAPHS_COMBO = "ui_cmb_graphs"

@@ -19,7 +19,7 @@ from qgis.core import (  # noqa: F811
 from qgis.gui import QgisInterface, QgsDockWidget
 from qgis.PyQt import uic
 from qgis.PyQt.QtCore import QProcess, Qt, QTimer
-from qgis.PyQt.QtGui import QColor, QIcon, QPainter, QPixmap
+from qgis.PyQt.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap
 from qgis.PyQt.QtWidgets import (
     QAction,
     QLineEdit,
@@ -85,7 +85,9 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         self.setupUi(widget)
         self.ui_log_btn.setIcon(get_icon("url.svg"))
         self.ui_graph_btn.setIcon(get_icon("graph_extent_icon.svg"))
-        self.ui_debug_btn.setIcon(get_icon("debug_icon.svg"))
+        # routing.earth logo button — white variant on dark themes for contrast
+        is_dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        self.ui_re_btn.setIcon(get_icon("re_logo_dark.png" if is_dark else "re_logo.png"))
 
         self.iface = iface
 
@@ -145,13 +147,13 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         self.menu_widget.currentRowChanged["int"].connect(self.ui_params_stacked.setCurrentIndex)
         self.router_widget.ui_cmb_prov.currentIndexChanged.connect(self._on_provider_changed)
         self.execute_btn.clicked.connect(self._on_execute)
-        self.ui_about_btn.clicked.connect(self._on_about_click)
+        self.router_widget.ui_btn_server_info.clicked.connect(self._on_about_click)
         self.ui_log_btn.clicked.connect(self._on_log_click)
         self.router_widget.mode_btns.buttonToggled.connect(self._on_profile_change)
         self.ui_graph_btn.clicked.connect(self._on_graph_click)
         self.ui_help_btn.clicked.connect(lambda: webbrowser.open(HELP_URL))
-        self.ui_debug_btn.clicked.connect(
-            lambda: ValhallaSettings().set(Dialogs.SETTINGS, "debug", str(self.ui_debug_btn.isChecked()))
+        self.ui_re_btn.clicked.connect(
+            lambda: webbrowser.open("https://routing-earth.com/software/qgis-plugin")
         )
 
         # icons on left side menu
@@ -166,7 +168,6 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         self.menu_widget.setCurrentRow(0)
 
         self.setWindowTitle(f"{PLUGIN_NAME} - Routing")
-        self.ui_debug_btn.setChecked(settings.is_debug())
 
         self.setWidget(widget)
 

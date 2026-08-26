@@ -7,7 +7,6 @@ from typing import Any, List, Optional, Union
 from qgis.core import QgsApplication, QgsSettings
 from qgis.PyQt.QtCore import QSettings
 
-from .. import PLUGIN_NAME
 from ..global_definitions import Dialogs, RouterType
 from ..gui.ui_definitions import PluginSettingsDlgElems
 from ..utils.misc_utils import str_to_bool
@@ -46,11 +45,11 @@ def get_settings_dir() -> Path:
 
     :returns: the permanent directory for this plugin.
     """
-    d = (
-        Path(QgsApplication.qgisSettingsDirPath())
-        .joinpath(PLUGIN_NAME.replace(" ", "_").lower())
-        .resolve()
-    )
+    # NB: hardcoded "valhalla", NOT derived from PLUGIN_NAME. The display name
+    # became "Network Analyst" in 6.0.0, but the settings/data dir identity must
+    # stay stable (same rationale as the package name and Processing provider id
+    # staying "valhalla") so a rename never orphans a user's settings/graphs.
+    d = Path(QgsApplication.qgisSettingsDirPath()).joinpath("valhalla").resolve()
     d.mkdir(exist_ok=True, parents=True)
 
     return d
