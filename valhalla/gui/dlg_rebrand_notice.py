@@ -20,7 +20,7 @@ from ..core.settings import ValhallaSettings
 from ..global_definitions import Dialogs
 from ..utils.resource_utils import get_icon
 
-REBRAND_VERSION = (6, 0, 0)
+REBRAND_VERSION = (7, 0, 0)
 LAST_SEEN_KEY = "last_seen_version"
 
 
