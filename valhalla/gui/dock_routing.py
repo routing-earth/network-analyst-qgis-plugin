@@ -1,6 +1,4 @@
-import json
 import webbrowser
-from copy import deepcopy
 from typing import List, Optional, Tuple
 
 from osgeo import gdal
@@ -19,14 +17,12 @@ from qgis.core import (  # noqa: F811
 from qgis.gui import QgisInterface, QgsDockWidget
 from qgis.PyQt import uic
 from qgis.PyQt.QtCore import QProcess, Qt, QTimer
-from qgis.PyQt.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap
+from qgis.PyQt.QtGui import QColor, QIcon, QKeySequence, QPainter, QPalette, QPixmap, QShortcut
 from qgis.PyQt.QtWidgets import (
     QAction,
     QLineEdit,
     QListWidget,
     QMenu,
-    QMessageBox,
-    QTextEdit,
     QToolButton,
     QWidget,
 )
@@ -47,7 +43,6 @@ from ..global_definitions import (
     RouterType,
 )
 from ..third_party.routingpy import routingpy
-from ..third_party.routingpy.routingpy.utils import deep_merge_dicts
 from ..utils.http_utils import get_status_response
 from ..utils.layer_utils import post_process_layer
 from ..utils.resource_utils import (
@@ -83,8 +78,6 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         QgsDockWidget.__init__(self)
         widget = QWidget(self)
         self.setupUi(widget)
-        self.ui_log_btn.setIcon(get_icon("url.svg"))
-        self.ui_graph_btn.setIcon(get_icon("graph_extent_icon.svg"))
         # routing.earth logo button — white variant on dark themes for contrast
         is_dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
         self.ui_re_btn.setIcon(get_icon("re_logo_dark.png" if is_dark else "re_logo.png"))
@@ -93,8 +86,6 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
 
         # add a status bar
         self.status_bar = add_msg_bar(self.verticalWrapper)
-        # keep the params so we can show them in the log window
-        self.log_params = dict()
         self.endpoint = ""
 
         # make sure we have some default settings:
@@ -147,13 +138,32 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         self.menu_widget.currentRowChanged["int"].connect(self.ui_params_stacked.setCurrentIndex)
         self.router_widget.ui_cmb_prov.currentIndexChanged.connect(self._on_provider_changed)
         self.execute_btn.clicked.connect(self._on_execute)
-        self.router_widget.ui_btn_server_info.clicked.connect(self._on_about_click)
-        self.ui_log_btn.clicked.connect(self._on_log_click)
+        self.router_widget.ui_btn_server_info.triggered.connect(self._on_about_click)
         self.router_widget.mode_btns.buttonToggled.connect(self._on_profile_change)
-        self.ui_graph_btn.clicked.connect(self._on_graph_click)
+        self.router_widget.ui_btn_server_graph_extent.clicked.connect(self._on_graph_click)
         self.ui_help_btn.clicked.connect(lambda: webbrowser.open(HELP_URL))
         self.ui_re_btn.clicked.connect(
             lambda: webbrowser.open("https://routing-earth.com/software/qgis-plugin")
+        )
+
+        # Return/Enter (also numpad) runs Execute while focus is inside the dock
+        for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(self.execute_btn.animateClick)
+
+        # make Execute stand out — dark grey, matching the sidebar nav
+        self.execute_btn.setStyleSheet(
+            "QPushButton {"
+            "  background-color: rgb(69, 69, 69);"
+            "  color: white;"
+            "  font-weight: bold;"
+            "  padding: 6px;"
+            "  border: none;"
+            "  border-radius: 3px;"
+            "}"
+            "QPushButton:hover { background-color: rgba(90, 90, 90, 230); }"
+            "QPushButton:pressed { background-color: rgba(50, 50, 50, 230); }"
         )
 
         # icons on left side menu
@@ -166,6 +176,12 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         self.menu_widget.item(5).setIcon(get_icon("expansion_icon.svg"))
         self.menu_widget.item(6).setIcon(get_icon("height_icon.svg"))
         self.menu_widget.setCurrentRow(0)
+
+        # hug the nav list to its content so the dark section ends after the
+        # icons — the routing.earth/help buttons then sit in the plain area below
+        mw = self.menu_widget
+        row_h = mw.sizeHintForRow(0)
+        mw.setFixedHeight(mw.count() * (row_h + 2 * mw.spacing()) + 2 * mw.frameWidth())
 
         self.setWindowTitle(f"{PLUGIN_NAME} - Routing")
 
@@ -322,19 +338,6 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         locations = self.waypoints_widget.get_locations(self.router_widget.router)
         params.update(self.waypoints_widget.get_extra_params(self.router_widget.router))
 
-        # build the stuff for logging
-        # params have "options" instead of "costing_options" bcs of routing-py
-        self.log_params = deepcopy(params)
-        if current_options := self.log_params.get("options"):
-            self.log_params.pop("options")
-            temp = {"costing_options": {self.router_widget.profile: current_options}}
-            self.log_params = deep_merge_dicts(temp, self.log_params)
-
-        self.log_params["costing"] = self.router_widget.profile
-        self.log_params["locations"] = [
-            {"lon": wp._position[0], "lat": wp._position[1], **wp._kwargs} for wp in locations
-        ]
-
         try:
             lyr = self._get_output_layer(self.endpoint, locations, params)
         except routingpy.exceptions.RouterError as e:  # HTTP error
@@ -426,25 +429,6 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         if exc_msg := about.exception_msg:
             self.status_bar.pushWarning("Failed /status request", exc_msg)
         about.exec()
-
-    def _on_log_click(self):
-        if not self.factory.url or not self.log_params:
-            self.status_bar.pushMessage("Nothing happened yet:)", Qgis.MessageLevel.Warning, 3)
-            return
-
-        msg_box = QMessageBox()
-        msg_box.setWindowTitle(f"Last {self.endpoint.lower()} request")
-        msg_box.setText(self.factory.url)
-        msg_box.setDetailedText(json.dumps(self.log_params, indent=2))
-        edit_box = msg_box.findChild(QTextEdit)
-        edit_box.setFixedHeight(edit_box.height() + 300)
-
-        # show the details (i.e. request params) by default
-        for btn in msg_box.buttons():
-            if msg_box.buttonRole(btn) == QMessageBox.ButtonRole.ActionRole:
-                btn.click()
-
-        msg_box.exec()
 
     def _on_provider_changed(self, row_id: int):
         """

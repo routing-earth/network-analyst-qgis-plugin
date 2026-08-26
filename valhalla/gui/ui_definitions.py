@@ -28,4 +28,5 @@ class RouterWidgetElems(str, Enum):
     SERVER_LOG = "ui_btn_server_log"
     SERVER_CONF = "ui_btn_server_conf"
     SERVER_INFO = "ui_btn_server_info"  # graph/version info dialog (was ui_about_btn)
+    SERVER_GRAPH_EXTENT = "ui_btn_server_graph_extent"  # load graph extent (was ui_graph_btn)
     SERVER_GRAPHS_COMBO = "ui_cmb_graphs"

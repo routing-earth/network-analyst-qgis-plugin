@@ -3,11 +3,13 @@ import platform
 
 from qgis.core import Qgis
 from qgis.PyQt.QtCore import QEvent, QFileSystemWatcher, QProcess, QSize
+from qgis.PyQt.QtGui import QAction
 from qgis.PyQt.QtWidgets import (
     QButtonGroup,
     QComboBox,
     QFormLayout,
     QHBoxLayout,
+    QMenu,
     QSizePolicy,
     QSpacerItem,
     QToolButton,
@@ -68,6 +70,9 @@ class RouterWidget(QWidget):
             self.ui_btn_server_log.setEnabled(False)
             self.ui_btn_server_conf.setEnabled(False)
             self.ui_cmb_graphs.setEnabled(False)
+            # local server unsupported: only the info action is meaningful, so
+            # make it the default (clicked) action of the menu button
+            self.ui_btn_server_menu.setDefaultAction(self.ui_btn_server_info)
             return
 
         # below ONLY for linux/osx
@@ -89,7 +94,7 @@ class RouterWidget(QWidget):
         # more connections
         self.ui_btn_server_conf.clicked.connect(self._on_settings_clicked)
         self.ui_btn_server_start.clicked.connect(self._on_server_toggle)
-        self.ui_btn_server_log.clicked.connect(self.dlg_server_log.show)
+        self.ui_btn_server_log.triggered.connect(self.dlg_server_log.show)
         self.ui_cmb_graphs.currentTextChanged.connect(self._on_graph_changed)
         self.valhalla_service.readyReadStandardOutput.connect(self._on_server_log_ready)
         self.valhalla_service.stateChanged.connect(self._on_server_state_changed)
@@ -303,25 +308,64 @@ class RouterWidget(QWidget):
                 False,
             )
         )
+        # settings as a normal tool button, between start/stop and the combo
+        self.server_layout.addWidget(
+            add_btn(
+                RouterWidgetElems.SERVER_CONF.value,
+                ":images/themes/default/propertyicons/layerconfiguration.svg",
+                "Configure the local server",
+                False,
+            )
+        )
         self.ui_cmb_graphs = QComboBox(self)
         self.ui_cmb_graphs.setObjectName(RouterWidgetElems.SERVER_GRAPHS_COMBO.value)
         self.ui_cmb_graphs.setToolTip("List of locally available graphs")
         self.server_layout.addWidget(self.ui_cmb_graphs)
-        for btn_name, (icon, tip) in {
-            RouterWidgetElems.SERVER_CONF: (
-                ":images/themes/default/propertyicons/layerconfiguration.svg",
-                "Configure the local server",
-            ),
-            RouterWidgetElems.SERVER_INFO: (
+
+        # a tool button menu to save space
+        self.ui_btn_server_menu = QToolButton(self)
+        self.ui_btn_server_menu.setObjectName("ui_btn_server_menu")
+        self.ui_btn_server_menu.setIconSize(QSize(24, 24))
+        self.ui_btn_server_menu.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.ui_btn_server_menu.setAutoRaise(False)
+        self.ui_btn_server_menu.triggered.connect(self.ui_btn_server_menu.setDefaultAction)
+
+        server_menu = QMenu(self)
+        server_actions = []
+        for elem, icon, label, tip in (
+            (
+                RouterWidgetElems.SERVER_INFO,
                 ":images/themes/default/mActionPropertiesWidget.svg",
+                "Graph && server info",
                 "Show graph & server info",
             ),
-            RouterWidgetElems.SERVER_LOG: (
+            (
+                RouterWidgetElems.SERVER_LOG,
                 ":images/themes/default/mMessageLog.svg",
+                "Server log",
                 "View local server logs",
             ),
-        }.items():
-            self.server_layout.addWidget(add_btn(btn_name, icon, tip, False))
+        ):
+            action = QAction(get_icon(icon), label, self)
+            action.setObjectName(elem.value)
+            action.setToolTip(tip)
+            setattr(self, elem.value, action)
+            server_menu.addAction(action)
+            server_actions.append(action)
+
+        self.ui_btn_server_menu.setMenu(server_menu)
+        self.ui_btn_server_menu.setDefaultAction(server_actions[0])
+        self.server_layout.addWidget(self.ui_btn_server_menu)
+
+        # graph-extent as a normal tool button, right of the menu
+        self.server_layout.addWidget(
+            add_btn(
+                RouterWidgetElems.SERVER_GRAPH_EXTENT.value,
+                "graph_extent_icon.svg",
+                "Loads the current graph extent as polygon layer and checks for things like admins & tz dbs",
+                False,
+            )
+        )
 
         self.outer_layout.addRow("Local Server", self.server_layout)
 
