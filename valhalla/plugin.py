@@ -6,6 +6,7 @@ from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import QAction, QMenu, QToolBar
 
 from . import PLUGIN_NAME
+from .gui.dlg_rebrand_notice import maybe_show_rebrand_notice
 from .gui.dock_routing import RoutingDockWidget
 from .processing.provider import ValhallaProvider
 from .utils.resource_utils import get_icon
@@ -54,7 +55,7 @@ class ValhallaPlugin:
         self.menu.setIcon(valhalla_icon)
 
         for title, callback, icon in (
-            ("Routing Functions", self.open_routing_dlg, valhalla_icon),
+            ("Network Analyst", self.open_routing_dlg, valhalla_icon),
         ):
             self.add_action(icon, title, callback)
 
@@ -67,6 +68,9 @@ class ValhallaPlugin:
         self.routing_dock = RoutingDockWidget(self.iface)
         self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.routing_dock)
         self.routing_dock.setVisible(True)
+
+        # one-shot "Valhalla is now Network Analyst" notice (see the module)
+        maybe_show_rebrand_notice(self.iface.mainWindow())
 
     def unload(self):
         """Unload the user interface."""

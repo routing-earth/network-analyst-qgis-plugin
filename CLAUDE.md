@@ -6,12 +6,22 @@ Notes for future Claude sessions working in this repo. Keep terse and current �
 
 QGIS plugin for the [Valhalla routing engine](https://github.com/valhalla/valhalla). Provides routing, isochrones, matrix, map-match, elevation, expansion, and TSP — both as interactive map tools and Processing algorithms — for car/bike/pedestrian/truck/motorbike profiles. Talks to remote Valhalla HTTP servers (FOSSGIS public, custom URLs) or runs Valhalla locally via the [`pyvalhalla`](https://pypi.org/project/pyvalhalla/) Python package (Linux/macOS only — Windows is HTTP-only).
 
+### Branding: "Valhalla" → "Network Analyst" (v6.0.0 rename)
+
+The plugin's **display name** is **Network Analyst** (`metadata.txt` `name=`). Only the label changed — the **identity did not**:
+
+- The plugin **folder / Python package** stays `valhalla/` (it's the plugins.qgis.org id AND the package that deliberately shadows pyvalhalla — never rename it).
+- The **settings/data dir is hardcoded `<profile>/valhalla/`** (`core/settings.py:get_settings_dir`), NOT derived from the display name. It holds `settings.ini`, the default `graph_dir`, pyvalhalla, and `routing_earth_utils`. It was briefly (and wrongly) `network_analyst/` when first derived from `PLUGIN_NAME` in 6.0.0 — that orphaned pre-rename users' settings and moved `graph_dir` out from under them; pinning it to `valhalla` is the fix. A leftover `network_analyst/` dir from a 6.0.0 test build can be deleted (or its contents moved into `valhalla/`).
+- The Processing **provider `id()` is hardcoded `"valhalla"`** (`processing/provider.py`), decoupled from the display name, so saved Processing models referencing `valhalla:route` etc. keep working. `provider.name()` follows the display name.
+- `PLUGIN_NAME` (`__init__.py`) is derived from `metadata.txt` `name=`; all user-facing display strings (dock titles, canvas submenu, About title, toolbar/menu) reference it — a future rename is again just the metadata line. "Valhalla" the **engine** name legitimately stays in URLs, `valhalla.json`, config, and class names.
+- On first startup after upgrading past 6.0.0 (or a fresh install), `gui/dlg_rebrand_notice.py` shows a one-shot "Valhalla is now Network Analyst" dialog (old + new logos inline), gated on a `last_seen_version` setting. Old logo preserved as `resources/icons/valhalla_old.svg`; `valhalla_logo.svg` is now the new routing.earth logo.
+
 ## Branches & QGIS/PyQt strategy
 
 - **`master`**: development branch for QGIS 4.x / PyQt6. **This is where new work lives.**
 - **`qgis-v3`**: maintenance branch for QGIS 3.x / PyQt5.
 - (`qgis-v4` may exist transiently as a working branch before merging into master — treat `master` as canonical going forward.)
-- `metadata.txt` on the v4 line declares `qgisMinimumVersion=4.0`, `qgisMaximumVersion=4.99`, `version=5.0.0`.
+- `metadata.txt` on the v4 line declares `qgisMinimumVersion=4.0`, `qgisMaximumVersion=4.99`, `version=6.0.0` (the Network Analyst rename; see Branding above).
 - The `qgis.PyQt.*` compatibility layer (provided by QGIS) abstracts most PyQt version differences, but **not all**: enum scoping (`Qt.LeftButton` vs `Qt.MouseButton.LeftButton`), `QFileSystemModel` location (QtWidgets in PyQt5 → QtGui in PyQt6), `QFileDialog` option flags, etc.
 
 ## Repository layout
@@ -26,10 +36,14 @@ valhalla/                       # plugin source root (this is what gets shipped)
 │   ├── router_factory.py       # builds router instances
 │   ├── http/router_client.py   # async HTTP via QgsNetworkAccessManager; sets X-Client-Id
 │   ├── results_factory.py      # parses Valhalla responses into QGIS layers
+│   ├── graph_registry.py       # the graph library API (over graph_dir) — see "Graphs" below
+│   ├── routing_earth.py        # routing-earth.com client plumbing (subprocess/auth/HTTP)
 │   └── settings.py             # ValhallaSettings (QSettings-backed)
 ├── gui/
 │   ├── dock_routing.py         # RoutingDockWidget — main interactive UI
-│   ├── widgets/                # router widget, waypoints, costing settings, graphs widget
+│   ├── widgets/                # router widget, waypoints, costing settings; unified graphs
+│   │                           #   table (widget_graph_manager + graph_table_model +
+│   │                           #   graph_ops_re/_local controllers)
 │   ├── compiled/*_ui.py        # GENERATED from resources/ui/*.ui — do not hand-edit
 │   └── dlg_*.py                # dialogs (settings, providers, server log, …)
 ├── processing/
@@ -87,51 +101,62 @@ QT_QPA_PLATFORM=offscreen python -m coverage run --append -m unittest discover -
 
 CI runs both inside QGIS docker images; see `.github/workflows/ci-tests.yml`.
 
-## Graphs: unified table + registry (settings dialog "Graphs" section)
+## Graphs: unified table over one self-contained graph library (settings dialog "Graphs")
 
-Local graphs and routing-earth.com packages live in ONE table since 2026-07-21 (the two
-separate widgets are gone). **There is no global "graph directory" anymore** — the
-`core/graph_registry.py` **registry** (`<profile>/valhalla/graphs/`, fixed/internal) holds
-one subdir per graph with only metadata: `id.json` (valhalla config overlay, ABSOLUTE
-paths — the data lives wherever the user picked) + `re_sync.json` for RE packages (the
-sidecar is what makes an entry routing-earth). A one-shot migration
-(`migrate_legacy_graph_dir`, hooked into dock startup; the popped legacy `graph_dir`
-settings key is the ran-marker) copies metadata from the old graph_dir — old dirs are
-never touched (PBF data lives inside them).
+Local graphs and routing-earth.com packages live in ONE table. **`graph_dir` is the single
+source of truth** (user-relocatable via the folder button; default `<profile>/valhalla/graph_dir`).
+A graph is a self-contained subdir `<graph_dir>/<name>/` holding `id.json` (the valhalla
+config overlay, ABSOLUTE paths *inside that dir*) plus its own data (tar/tiles) — **nothing is
+tracked outside the subdir**. A routing.earth package is just an `id.json` that also carries an
+optional **`routing_earth` block** (`scope`/`cadence` + sync bookkeeping); its presence marks
+the entry RE, its absence means plain local. No registry/metadata split, no sidecar, no
+migration — an old master `id.json` (no block) loads as a local graph unchanged. Changing
+`graph_dir` only re-scans; it never moves graphs (old ones reappear if you point back).
+
+This is the master storage model restored; the earlier registry-split + `re_sync.json` +
+`migrate_legacy_graph_dir` design (2026-07..08) was reverted as needless complexity.
 
 Module split (deliberately not one file):
 
-- `core/graph_registry.py` — `GraphEntry` + registry API (`registry_dir`, `list_names`,
-  `discover`, `register(replace=False)` raises on name collision, `unregister`, tar-state/
-  sidecar IO, timestamp humanizing, migration). No UI, no Qt widgets.
+- `core/graph_registry.py` — `GraphEntry` + library API (`graph_dir`, `list_names`,
+  `discover`, `register(replace=False)` raises on name collision, `unregister` (deletes the
+  whole subdir — data too), `set_re_state`/`mark_synced` write into the `routing_earth`
+  block, `local_graph_config`/`re_graph_config` builders, `read_tar_state` tar-member reader,
+  timestamp humanizing). No UI, no Qt widgets.
 - `core/routing_earth.py` — RE plumbing only: CLI args/env, auth-db API key,
   entitlements HTTP call. Imports nothing from gui; graph_registry never imports it.
 - `gui/widgets/graph_table_model.py` — `GraphTableModel(QAbstractTableModel)`: entries +
   grayed "available" entitlement rows in one model; columns Region | Cadence | OSM age |
   Last diff (size of the last downloaded diff/seed, parsed from CLI output) | Synced | Action; red = RE entry whose tar is missing/not managed.
 - `gui/widgets/graph_ops_re.py` — `RoutingEarthController` (the `re` QProcess: init/adopt/
-  sync/status-queue) + `InitPackageDialog`. `gui/widgets/graph_ops_local.py` —
-  `LocalGraphController` (chained `valhalla_build_admins`/`_tiles` PBF build, tar-in-place
-  add, tile_url add). Controllers get injected callables (log/status_bar/refresh/
-  confirm_replace), no parent back-pointers.
+  sync/status-queue). `init_package(Entitlement)` = sized confirm then seed (no dialog);
+  wildcard `*` first prompts for the region via `QInputDialog`.
+  `gui/widgets/graph_ops_local.py` — `LocalGraphController` (chained
+  `valhalla_build_admins`/`_tiles` PBF build into `<graph_dir>/<name>/`, **From Tar = move**
+  into the library, tile_url add). Controllers get injected callables (log/status_bar/
+  refresh/confirm_replace), no parent back-pointers.
 - `gui/widgets/widget_graph_manager.py` — chrome + wiring only: API key/URL row, toolbar
-  (add-menu, remove, refresh, valhalla-config button → `ConfigEditorDialog`), QTableView,
-  collapsible log splitter (state key `re_splitter_state`), one QFileSystemWatcher on the
-  registry. Action buttons via `setIndexWidget`, rebuilt on every `modelReset` — closures
-  capture the entry NAME and re-resolve at click time (watcher resets would stale them).
+  (add-menu, remove, **graph_dir folder picker**, valhalla-config button →
+  `ConfigEditorDialog`), QTableView, collapsible log splitter (state key `re_splitter_state`),
+  one QFileSystemWatcher on `graph_dir()`. Action buttons via `setIndexWidget`, rebuilt on
+  every `modelReset` — closures capture the entry NAME and re-resolve at click time (watcher
+  resets would stale them).
 
 Behavior notes:
 
-- **Add-menu**: `Init new…`, `Adopt existing…`, then `addSection("Advanced")` with
-  `From Tar` (registers in place, never moves), `From URL`, `From PBF` (both dialogs have
-  a data-dir picker, default `<profile>/valhalla/graphs_data/<name>`). NB the section is a
-  separator-action: never index `menu.actions()` positionally (tests find actions by
-  text); the default action is pinned to "Init new…".
+- **Add-menu**: `Update from routing.earth` (default action), then `addSection("Advanced")`
+  with `From Tar` (**moves** the tar into `<graph_dir>/<stem>/`; a *managed* RE tar is refused
+  here with a redirect to the account flow), `From URL`, `From PBF` (both build/cache into
+  `<graph_dir>/<name>/`, no external picker). NB the section is a separator-action: never index
+  `menu.actions()` positionally (tests find actions by text).
 - **Duplicates**: every add path funnels through one confirm-replace prompt
-  (`_confirm_replace`); `register()` raises `FileExistsError` unless `replace=True`.
-- **Remove**: unregisters the entry; opt-in checkbox deletes the listed data paths.
-- **RouterWidget** (dock) reads the registry too: combo from `list_names()`, watcher on
-  `registry_dir()`, selection deep-merges `<registry>/<name>/id.json` into `valhalla.json`.
+  (`_confirm_replace`); `register()` raises `FileExistsError` unless `replace=True`. A replace
+  `unregister`s first (fresh subdir, no stale data mixed in).
+- **Remove**: `unregister` deletes the whole `<graph_dir>/<name>/` subdir (metadata AND data)
+  after one confirm — no separate "delete data" checkbox (data is inside).
+- **RouterWidget** (dock): combo from `list_names()`, watcher on `graph_dir()`, selection
+  loads `<graph_dir>/<name>/id.json`, **pops `routing_earth`** (plugin metadata, not valhalla
+  config), then deep-merges the rest into `valhalla.json`.
 - **CRITICAL — in-process import is impossible:** this plugin's package is named `valhalla`
   and shadows pyvalhalla in `sys.modules`, so `routing_earth_utils` (imports
   `valhalla.baldr`) can never load inside QGIS. All RE ops run the CLI as a **QProcess
@@ -140,17 +165,24 @@ Behavior notes:
   `re status` prints one-line JSON on stdout and exits 2 when behind (git-diff style);
   `sync`/`init` output carries the `osm data <ts>` token (regex-parsed). Same trap applies
   to ANY future pyvalhalla-importing code.
-- **Refresh button** = ① `GET /api/v1/entitlements` directly via QgsNetworkAccessManager
-  (Bearer key; a 401 pops QGIS's credentials dialog), ② `re status` per package. Non-local
-  entitled pairs render as grayed available rows with a download button (Init dialog
-  slimmed to the tar path, prefilled `<profile>/valhalla/graphs_re/<scope>_<cadence>.tar`);
-  wildcard `*` shows as-is. Available rows are in-memory only.
-- **Dev-env expectation (TEMPORARY):** `routing-earth-utils` must be installed in the
-  python the `re_python` setting points to (default platform `PYTHON_EXE`; **PATH inside
-  QGIS is not the shell PATH**, so it points at Nils's `global_venv/bin/python3`).
-  `re_python` is marked for deletion (TODO in `settings.py`) — plan: install from PyPI via
-  the plugin like pyvalhalla. Profile pyvalhalla dir is prepended to the subprocess
-  PYTHONPATH so the right `valhalla` wins.
+- **Update from routing.earth** = ① `GET /api/v1/entitlements` directly via
+  QgsNetworkAccessManager (Bearer key; a 401 pops QGIS's credentials dialog), ② `re status`
+  per package. The endpoint returns `Entitlement`s enriched with the newest full snapshot's
+  `compressed_size_bytes`/`size_bytes`/`dataset_id`/`osm_data_timestamp` (all nullable,
+  snake_case). Non-local pairs render as grayed available rows showing **download size** (in
+  the Last-diff column) + OSM age, with a download button → sized confirm → seed into
+  `<graph_dir>/<scope>_<cadence>/`. Wildcard `*` shows as-is (no size; prompts for a region on
+  download). Available rows are in-memory only.
+- **Install (like pyvalhalla):** the plugin installs `routing-earth-utils` itself from the
+  deps table (`dlg_plugin_settings` → `install_pkg` → `install_routing_earth_utils` in
+  `utils/resource_utils.py`). Unlike pyvalhalla (a self-contained wheel that's just unzipped)
+  re-utils has deps, so it's `pip install --target <profile>/routing_earth_utils`: re-utils
+  `--no-deps` (reuse the unpacked pyvalhalla) + `cryptography` (+ `backports.zstd` on py<3.14).
+  **On test.pypi for now** → `--index-url test.pypi --extra-index-url pypi.org` so deps
+  resolve from real PyPI; version check hits test.pypi's JSON API (`PyPiPkg.json_url`). The
+  subprocess runs under `PYTHON_EXE` with `re_utils_root_dir()` + pyvalhalla dir prepended to
+  PYTHONPATH (`re_process_env`, `os.pathsep`-joined — Windows-safe). The old `re_python`
+  setting is gone.
 - **Auth:** API key in the QGIS auth database (`APIHeader` config, id in `re_authcfg`);
   passed via env `ROUTING_EARTH_API_KEY`, never argv/QSettings. API origin override:
   `re_api_url` (default https://routing-earth.com).
@@ -164,7 +196,7 @@ These will keep biting — check first when something breaks after touching v4 c
 
 1. **Enum scoping.** PyQt6 requires fully scoped enum access. `Qt.LeftButton` → `Qt.MouseButton.LeftButton`; `QDialogButtonBox.Ok` → `QDialogButtonBox.StandardButton.Ok`; `QDir.Dirs` → `QDir.Filter.Dirs`. The compiled UI files were regenerated with `pyuic6` to handle this for generated code — but hand-written code (especially `tests/`) still needs manual fixes.
 2. **Class relocations.** `QFileSystemModel` moved from `QtWidgets` to `QtGui`. `QAction` moved from `QtWidgets` to `QtGui`. `QRegExp` removed → use `QRegularExpression`.
-3. **`QSortFilterProxyModel` + `QFileSystemModel` is brittle in Qt6.** `proxy.mapFromSource(idx)` walks the source index's parent chain; `QFileSystemModel` only fetches children of `setRootPath`, never the ancestor chain. Result: `mapFromSource` returns invalid even when `model.index(path)` is valid. Fix used in this repo: drop the proxy, use `QFileSystemWatcher` + `QStringListModel` populated from `iterdir()` (see `widget_router.py` and `widget_graphs.py`).
+3. **`QSortFilterProxyModel` + `QFileSystemModel` is brittle in Qt6.** `proxy.mapFromSource(idx)` walks the source index's parent chain; `QFileSystemModel` only fetches children of `setRootPath`, never the ancestor chain. Result: `mapFromSource` returns invalid even when `model.index(path)` is valid. Fix used in this repo: drop the proxy, use `QFileSystemWatcher` + explicit `iterdir()`-based models (see `widget_router.py` and `graph_table_model.py`).
 4. **Stale `.pyc`.** When refactoring imports, clear `__pycache__/` — Python's mtime-based invalidation can lag and produce confusing tracebacks referring to old import statements.
 
 ## Coding conventions

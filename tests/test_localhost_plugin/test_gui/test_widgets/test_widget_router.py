@@ -52,7 +52,9 @@ class TestRouterWidget(LocalhostPluginTestCase):
         parsed_url = urlparse(URL)
         try_connection(parsed_url.hostname, parsed_url.port)
 
-        QTest.mouseClick(self.dlg.router_widget.ui_btn_server_stop, Qt.MouseButton.LeftButton)
+        QTest.mouseClick(
+            self.dlg.router_widget.ui_btn_server_start, Qt.MouseButton.LeftButton
+        )  # toggles to stop
         sleep(0.5)
 
         # test that it's _not_ reachable
@@ -66,7 +68,9 @@ class TestRouterWidget(LocalhostPluginTestCase):
 
         self.assertIn("Started ", self.dlg.router_widget.dlg_server_log.text_log.toPlainText())
 
-        QTest.mouseClick(self.dlg.router_widget.ui_btn_server_stop, Qt.MouseButton.LeftButton)
+        QTest.mouseClick(
+            self.dlg.router_widget.ui_btn_server_start, Qt.MouseButton.LeftButton
+        )  # toggles to stop
         sleep(0.1)
 
         self.assertIn(

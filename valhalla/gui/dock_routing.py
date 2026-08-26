@@ -1,6 +1,4 @@
-import json
 import webbrowser
-from copy import deepcopy
 from typing import List, Optional, Tuple
 
 from osgeo import gdal
@@ -18,20 +16,21 @@ from qgis.core import (  # noqa: F811
 )
 from qgis.gui import QgisInterface, QgsDockWidget
 from qgis.PyQt import uic
+from qgis.PyQt.QtCore import QProcess, Qt, QTimer
+from qgis.PyQt.QtGui import QColor, QIcon, QKeySequence, QPainter, QPalette, QPixmap, QShortcut
 from qgis.PyQt.QtWidgets import (
     QAction,
     QLineEdit,
     QListWidget,
     QMenu,
-    QMessageBox,
-    QTextEdit,
     QToolButton,
     QWidget,
 )
 
+from .. import PLUGIN_NAME
+from ..core import graph_registry
 from ..core.results_factory import ResultsFactory
 from ..core.settings import (
-    DEFAULT_GRAPH_DIR,
     DEFAULT_PROVIDERS,
     ProviderSetting,
     ValhallaSettings,
@@ -44,7 +43,6 @@ from ..global_definitions import (
     RouterType,
 )
 from ..third_party.routingpy import routingpy
-from ..third_party.routingpy.routingpy.utils import deep_merge_dicts
 from ..utils.http_utils import get_status_response
 from ..utils.layer_utils import post_process_layer
 from ..utils.resource_utils import (
@@ -80,36 +78,32 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         QgsDockWidget.__init__(self)
         widget = QWidget(self)
         self.setupUi(widget)
-        self.ui_log_btn.setIcon(get_icon("url.svg"))
-        self.ui_graph_btn.setIcon(get_icon("graph_extent_icon.svg"))
-        self.ui_debug_btn.setIcon(get_icon("debug_icon.svg"))
+        # routing.earth logo button — white variant on dark themes for contrast
+        is_dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        self.ui_re_btn.setIcon(get_icon("re_logo_dark.png" if is_dark else "re_logo.png"))
 
         self.iface = iface
 
         # add a status bar
         self.status_bar = add_msg_bar(self.verticalWrapper)
-        # keep the params so we can show them in the log window
-        self.log_params = dict()
         self.endpoint = ""
 
         # make sure we have some default settings:
         # - at least one remote HTTP API URL and localhost
-        # - a default graph dir in the settings
         # - the default binary path
+        # - the graph registry (+ one-shot legacy migration)
         # - a valhalla.json we can overwrite with the current graph settings
         settings = ValhallaSettings()
         if not settings.get_providers(RouterType.VALHALLA):
             for prov in DEFAULT_PROVIDERS:
                 settings.set_provider(RouterType.VALHALLA.lower(), prov)
-        if not settings.get_graph_dir():
-            settings.set_graph_dir(DEFAULT_GRAPH_DIR)
         if not settings.get_binary_dir():
             bin_dir = get_default_valhalla_binary_dir()
             bin_dir.parent.parent.mkdir(exist_ok=True, parents=True)
             settings.set_binary_dir(bin_dir)
 
-        # graph_dir needs to exist
-        ValhallaSettings().get_graph_dir().mkdir(exist_ok=True, parents=True)
+        # ensure the graph library dir exists (sole source of truth for graphs)
+        graph_registry.graph_dir()
 
         # add custom widgets to this dialog
         self.router_widget = RouterWidget(self)
@@ -129,18 +123,47 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
 
         self._on_profile_change()
 
+        # "on air" blinker: while the local valhalla server runs, the stop
+        # button's black-square icon pulses red at a fixed cadence
+        self._blink_on = False
+        self._blink_timer = QTimer(self)
+        self._blink_timer.setInterval(750)
+        self._blink_timer.timeout.connect(self._on_server_blink)
+        # no valhalla_service on Windows (no local server support)
+        if hasattr(self.router_widget, "valhalla_service"):
+            self.router_widget.valhalla_service.stateChanged.connect(self._on_server_state_changed)
+
         # connections
         self.menu_widget.currentRowChanged["int"].connect(self._on_menu_change)
         self.menu_widget.currentRowChanged["int"].connect(self.ui_params_stacked.setCurrentIndex)
         self.router_widget.ui_cmb_prov.currentIndexChanged.connect(self._on_provider_changed)
         self.execute_btn.clicked.connect(self._on_execute)
-        self.ui_about_btn.clicked.connect(self._on_about_click)
-        self.ui_log_btn.clicked.connect(self._on_log_click)
+        self.router_widget.ui_btn_server_info.triggered.connect(self._on_about_click)
         self.router_widget.mode_btns.buttonToggled.connect(self._on_profile_change)
-        self.ui_graph_btn.clicked.connect(self._on_graph_click)
+        self.router_widget.ui_btn_server_graph_extent.clicked.connect(self._on_graph_click)
         self.ui_help_btn.clicked.connect(lambda: webbrowser.open(HELP_URL))
-        self.ui_debug_btn.clicked.connect(
-            lambda: ValhallaSettings().set(Dialogs.SETTINGS, "debug", str(self.ui_debug_btn.isChecked()))
+        self.ui_re_btn.clicked.connect(
+            lambda: webbrowser.open("https://routing-earth.com/software/qgis-plugin")
+        )
+
+        # Return/Enter (also numpad) runs Execute while focus is inside the dock
+        for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(self.execute_btn.animateClick)
+
+        # make Execute stand out — dark grey, matching the sidebar nav
+        self.execute_btn.setStyleSheet(
+            "QPushButton {"
+            "  background-color: rgb(69, 69, 69);"
+            "  color: white;"
+            "  font-weight: bold;"
+            "  padding: 6px;"
+            "  border: none;"
+            "  border-radius: 3px;"
+            "}"
+            "QPushButton:hover { background-color: rgba(90, 90, 90, 230); }"
+            "QPushButton:pressed { background-color: rgba(50, 50, 50, 230); }"
         )
 
         # icons on left side menu
@@ -154,8 +177,13 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         self.menu_widget.item(6).setIcon(get_icon("height_icon.svg"))
         self.menu_widget.setCurrentRow(0)
 
-        self.setWindowTitle("Valhalla - Routing")
-        self.ui_debug_btn.setChecked(settings.is_debug())
+        # hug the nav list to its content so the dark section ends after the
+        # icons — the routing.earth/help buttons then sit in the plain area below
+        mw = self.menu_widget
+        row_h = mw.sizeHintForRow(0)
+        mw.setFixedHeight(mw.count() * (row_h + 2 * mw.spacing()) + 2 * mw.frameWidth())
+
+        self.setWindowTitle(f"{PLUGIN_NAME} - Routing")
 
         self.setWidget(widget)
 
@@ -310,19 +338,6 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         locations = self.waypoints_widget.get_locations(self.router_widget.router)
         params.update(self.waypoints_widget.get_extra_params(self.router_widget.router))
 
-        # build the stuff for logging
-        # params have "options" instead of "costing_options" bcs of routing-py
-        self.log_params = deepcopy(params)
-        if current_options := self.log_params.get("options"):
-            self.log_params.pop("options")
-            temp = {"costing_options": {self.router_widget.profile: current_options}}
-            self.log_params = deep_merge_dicts(temp, self.log_params)
-
-        self.log_params["costing"] = self.router_widget.profile
-        self.log_params["locations"] = [
-            {"lon": wp._position[0], "lat": wp._position[1], **wp._kwargs} for wp in locations
-        ]
-
         try:
             lyr = self._get_output_layer(self.endpoint, locations, params)
         except routingpy.exceptions.RouterError as e:  # HTTP error
@@ -350,7 +365,7 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
     def _on_menu_change(self, menu_index: int):
         """Only changes the window title"""
 
-        title = "Valhalla - "
+        title = f"{PLUGIN_NAME} - "
         if menu_index == 0:
             title += "Routing"
         elif menu_index == 1:
@@ -370,30 +385,50 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
 
         self.setWindowTitle(title)
 
+    def _on_server_state_changed(self, new_state: QProcess.ProcessState):
+        running = new_state != QProcess.ProcessState.NotRunning
+        if running:
+            self._blink_timer.start()
+        else:
+            self._blink_timer.stop()
+            self._blink_on = False
+            # clear the red tint back to the run icon (router widget owns the
+            # button; both handlers fire on stateChanged, order not guaranteed)
+            self.router_widget.ui_btn_server_start.setIcon(
+                get_icon(":images/themes/default/mActionStart.svg")
+            )
+
+    def _on_server_blink(self):
+        """The "on air" blink: pulse the stop button's black square icon red."""
+        self._blink_on = not self._blink_on
+        icon = (
+            self._red_stop_icon()
+            if self._blink_on
+            else get_icon(":images/themes/default/mActionStop.svg")
+        )
+        self.router_widget.ui_btn_server_start.setIcon(icon)
+
+    def _red_stop_icon(self) -> QIcon:
+        """A red-tinted copy of the stop icon (cached), matching the button size."""
+        if getattr(self, "_red_stop_icon_cache", None) is None:
+            btn = self.router_widget.ui_btn_server_start
+            size = btn.iconSize()
+            src = get_icon(":images/themes/default/mActionStop.svg").pixmap(size)
+            tinted = QPixmap(src.size())
+            tinted.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(tinted)
+            painter.drawPixmap(0, 0, src)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+            painter.fillRect(tinted.rect(), QColor("#ff2222"))
+            painter.end()
+            self._red_stop_icon_cache = QIcon(tinted)
+        return self._red_stop_icon_cache
+
     def _on_about_click(self):
         about = AboutDialog(self)
         if exc_msg := about.exception_msg:
             self.status_bar.pushWarning("Failed /status request", exc_msg)
         about.exec()
-
-    def _on_log_click(self):
-        if not self.factory.url or not self.log_params:
-            self.status_bar.pushMessage("Nothing happened yet:)", Qgis.MessageLevel.Warning, 3)
-            return
-
-        msg_box = QMessageBox()
-        msg_box.setWindowTitle(f"Last {self.endpoint.lower()} request")
-        msg_box.setText(self.factory.url)
-        msg_box.setDetailedText(json.dumps(self.log_params, indent=2))
-        edit_box = msg_box.findChild(QTextEdit)
-        edit_box.setFixedHeight(edit_box.height() + 300)
-
-        # show the details (i.e. request params) by default
-        for btn in msg_box.buttons():
-            if msg_box.buttonRole(btn) == QMessageBox.ButtonRole.ActionRole:
-                btn.click()
-
-        msg_box.exec()
 
     def _on_provider_changed(self, row_id: int):
         """
@@ -479,7 +514,7 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         """Executed on every right-click in the map canvas"""
         map_pt = event.mapPoint()
 
-        routing_menu = menu.addMenu("Valhalla")
+        routing_menu = menu.addMenu(PLUGIN_NAME)
         routing_menu.setIcon(get_icon("valhalla_logo.svg"))
 
         origin = QAction(get_icon("origin.svg"), "Add waypoint", menu)
@@ -503,6 +538,20 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         routing_menu.addAction(clear_pts)
 
     def unload(self):
+        # don't leave an orphaned valhalla server behind on plugin
+        # reload/unload or QGIS shutdown (no valhalla_service on Windows);
+        # wait briefly so the port is free again for a reloaded instance
+        service = getattr(self.router_widget, "valhalla_service", None)
+        if service is not None and service.state() != QProcess.ProcessState.NotRunning:
+            self.router_widget._on_server_stop()
+            service.waitForFinished(2000)
+
+        # kill any in-flight RE / graph-build subprocess so a reload doesn't
+        # leave a lingering QProcess whose stale state reads as "Busy"
+        graph_widget = getattr(getattr(self.router_widget, "settings_dlg", None), "graph_widget", None)
+        if graph_widget is not None:
+            graph_widget.shutdown()
+
         try:
             self.iface.mapCanvas().contextMenuAboutToShow.disconnect(self._populate_canvas_menu)
         except TypeError:

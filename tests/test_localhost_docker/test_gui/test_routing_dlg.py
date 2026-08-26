@@ -1,10 +1,8 @@
 import unittest
 
 from qgis.core import QgsProject, QgsVectorLayer, QgsWkbTypes
-from qgis.PyQt.QtCore import Qt
-from qgis.PyQt.QtTest import QTest
 
-from valhalla.core.settings import DEFAULT_GRAPH_DIR, ValhallaSettings, get_settings_dir
+from valhalla.core.settings import ValhallaSettings, get_settings_dir
 
 from ...constants import WAYPOINTS_4326
 from ...utilities import get_qgis_app
@@ -91,13 +89,13 @@ class TestRoutingDialog(unittest.TestCase):
 
         self.assertTrue(settings_ini.exists())
         self.assertEqual(len(ValhallaSettings().get_providers(RouterType.VALHALLA)), 2)
-        self.assertEqual(ValhallaSettings().get_graph_dir(), DEFAULT_GRAPH_DIR)
+        self.assertTrue(get_settings_dir().joinpath("graph_dir").is_dir())
         self.assertEqual(ValhallaSettings().get_binary_dir(), get_default_valhalla_binary_dir())
 
     def test_graph_extent_fossgis(self):
         # set FOSSGIS, so we get an info msg
         self.dlg.router_widget.ui_cmb_prov.setCurrentIndex(0)
-        QTest.mouseClick(self.dlg.ui_graph_btn, Qt.MouseButton.LeftButton)
+        self.dlg.router_widget.ui_btn_server_graph_extent.click()
         self.assertIn(
             "The public server has the full world graph and admins/timezones loaded",
             self.dlg.status_bar.currentItem().text(),
@@ -105,7 +103,7 @@ class TestRoutingDialog(unittest.TestCase):
 
     def test_graph_extent_localhost(self):
         self.dlg.router_widget.ui_cmb_prov.setCurrentIndex(1)
-        QTest.mouseClick(self.dlg.ui_graph_btn, Qt.MouseButton.LeftButton)
+        self.dlg.router_widget.ui_btn_server_graph_extent.click()
         self.assertIn(
             "Both admin areas and timezones are built into the graph.",
             self.dlg.status_bar.currentItem().text(),

@@ -2,18 +2,21 @@ import json
 import platform
 
 from qgis.core import Qgis
-from qgis.PyQt.QtCore import QFileSystemWatcher, QProcess, QSize
+from qgis.PyQt.QtCore import QEvent, QFileSystemWatcher, QProcess, QSize
+from qgis.PyQt.QtGui import QAction
 from qgis.PyQt.QtWidgets import (
     QButtonGroup,
     QComboBox,
     QFormLayout,
     QHBoxLayout,
+    QMenu,
     QSizePolicy,
     QSpacerItem,
     QToolButton,
     QWidget,
 )
 
+from ...core import graph_registry
 from ...core.settings import ProviderSetting, ValhallaSettings
 from ...global_definitions import RouterMethod, RouterProfile, RouterType
 from ...gui.dlg_plugin_settings import PluginSettingsDialog
@@ -47,7 +50,6 @@ class RouterWidget(QWidget):
         self.setupUi()
 
         self.settings_dlg = PluginSettingsDialog(self)
-        graph_dir = ValhallaSettings().get_graph_dir()
 
         self._populate_providers()
         self._on_graph_changed(self.ui_cmb_graphs.currentText())
@@ -65,10 +67,12 @@ class RouterWidget(QWidget):
         # Windows has no service support yet, so no need to enable local servers
         if platform.system() == "Windows":
             self.ui_btn_server_start.setEnabled(False)
-            self.ui_btn_server_stop.setEnabled(False)
             self.ui_btn_server_log.setEnabled(False)
             self.ui_btn_server_conf.setEnabled(False)
             self.ui_cmb_graphs.setEnabled(False)
+            # local server unsupported: only the info action is meaningful, so
+            # make it the default (clicked) action of the menu button
+            self.ui_btn_server_menu.setDefaultAction(self.ui_btn_server_info)
             return
 
         # below ONLY for linux/osx
@@ -78,27 +82,32 @@ class RouterWidget(QWidget):
         self.valhalla_service.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self.dlg_server_log = ServerLogDialog()
 
-        # watch the graph dir and rebuild the combobox items on any change
-        self.graph_dir_watcher = QFileSystemWatcher([str(graph_dir.resolve())], self)
+        # watch the graph library and rebuild the combobox items on any change.
+        # the watcher only fires on DIRECT children of graph_dir, so it misses a
+        # newly registered graph whose id.json is written INSIDE <name>/ (e.g. an
+        # RE download) — re-scan on dropdown open so selection is always current.
+        self.graph_dir_watcher = QFileSystemWatcher([str(graph_registry.graph_dir())], self)
         self.graph_dir_watcher.directoryChanged.connect(self._refresh_graph_combo)
+        self.ui_cmb_graphs.installEventFilter(self)
         self._refresh_graph_combo()
 
         # more connections
         self.ui_btn_server_conf.clicked.connect(self._on_settings_clicked)
-        self.ui_btn_server_start.clicked.connect(self._on_server_start)
-        self.ui_btn_server_stop.clicked.connect(self._on_server_stop)
-        self.ui_btn_server_log.clicked.connect(self.dlg_server_log.show)
+        self.ui_btn_server_start.clicked.connect(self._on_server_toggle)
+        self.ui_btn_server_log.triggered.connect(self.dlg_server_log.show)
         self.ui_cmb_graphs.currentTextChanged.connect(self._on_graph_changed)
         self.valhalla_service.readyReadStandardOutput.connect(self._on_server_log_ready)
         self.valhalla_service.stateChanged.connect(self._on_server_state_changed)
 
+    def eventFilter(self, obj, event):
+        # rescan right before the graph dropdown opens (see watcher note above)
+        if obj is self.ui_cmb_graphs and event.type() == QEvent.Type.MouseButtonPress:
+            self._refresh_graph_combo()
+        return super().eventFilter(obj, event)
+
     def _refresh_graph_combo(self, _path: str = ""):
-        graph_dir = ValhallaSettings().get_graph_dir()
         current = self.ui_cmb_graphs.currentText()
-        items = sorted(
-            (p.name for p in graph_dir.iterdir() if p.is_dir() and (p / ID_JSON).exists()),
-            key=str.casefold,
-        )
+        items = graph_registry.list_names()
         self.ui_cmb_graphs.blockSignals(True)
         self.ui_cmb_graphs.clear()
         self.ui_cmb_graphs.addItems(items)
@@ -120,6 +129,8 @@ class RouterWidget(QWidget):
 
     @property
     def package_path(self) -> str:
+        # only relevant for RouterMethod.LOCAL, which is currently never
+        # registered — kept for dlg_spopt's LOCAL branch
         return self._package_path
 
     @property
@@ -135,10 +146,19 @@ class RouterWidget(QWidget):
             return
 
         # load the current graph settings (tile_dir etc)
-        graph_dir = ValhallaSettings().get_graph_dir()
-        id_json = graph_dir.joinpath(new_name, ID_JSON).resolve()
-        with id_json.open("r") as f:
-            graph_settings = json.load(f)
+        id_json = graph_registry.graph_dir().joinpath(new_name, ID_JSON).resolve()
+        try:
+            with id_json.open("r") as f:
+                graph_settings = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            # the entry vanished/broke while selected
+            self._parent.status_bar.pushMessage(
+                f"Graph '{new_name}' is not registered (anymore)", Qgis.MessageLevel.Warning, 6
+            )
+            return
+
+        # the routing_earth block is plugin metadata, not valhalla config
+        graph_settings.pop("routing_earth", None)
 
         # overwrite valhalla.json with those graph settings
         config = get_valhalla_config_path()
@@ -152,17 +172,20 @@ class RouterWidget(QWidget):
             f.truncate()
             json.dump(new_settings, f, indent=2)
 
-    def _on_server_state_changed(self, new_state: QProcess.ProcessState):
-        # default to QProcess.ProcessState.Running
-        msg = "Local Valhalla server started"
-        level = Qgis.MessageLevel.Info
-        if new_state == QProcess.ProcessState.NotRunning:
-            msg = "Local Valhalla server stopped"
-            level = Qgis.MessageLevel.Warning
-        elif new_state == QProcess.ProcessState.Starting:
-            return
+    def _on_server_toggle(self):
+        if self.valhalla_service.state() == QProcess.ProcessState.NotRunning:
+            self._on_server_start()
+        else:
+            self._on_server_stop()
 
-        self._parent.status_bar.pushMessage(msg, level, 3)
+    def _on_server_state_changed(self, new_state: QProcess.ProcessState):
+        # the one start/stop button follows the process state
+        if new_state == QProcess.ProcessState.NotRunning:
+            self.ui_btn_server_start.setIcon(get_icon(":images/themes/default/mActionStart.svg"))
+            self.ui_btn_server_start.setToolTip("Start a local Valhalla server")
+        else:  # Starting or Running
+            self.ui_btn_server_start.setIcon(get_icon(":images/themes/default/mActionStop.svg"))
+            self.ui_btn_server_start.setToolTip("Stop the local Valhalla server")
 
     def _on_server_log_ready(self):
         log = self.valhalla_service.readAll().data().decode()
@@ -190,6 +213,11 @@ class RouterWidget(QWidget):
         except ModuleNotFoundError as e:
             self._parent.status_bar.pushMessage(e.msg, Qgis.MessageLevel.Critical, 6)
             return
+
+        # re-merge the selected graph's id.json EVERY start: the entry may
+        # have been replaced/synced since the combo selection last changed,
+        # and valhalla.json would otherwise keep serving stale paths
+        self._on_graph_changed(self.ui_cmb_graphs.currentText())
 
         args = [str(get_valhalla_config_path()), "1"]
 
@@ -270,34 +298,74 @@ class RouterWidget(QWidget):
 
         self.outer_layout.addRow("Provider", self.provider_field)
 
-        # the middle row, i.e. local server
+        # the middle row, i.e. local server; one button toggles start/stop
         self.server_layout = QHBoxLayout(self)
-        for btn_name, (icon, tip) in {
-            RouterWidgetElems.SERVER_START: (
+        self.server_layout.addWidget(
+            add_btn(
+                RouterWidgetElems.SERVER_START.value,
                 ":images/themes/default/mActionStart.svg",
                 "Start a local Valhalla server",
-            ),
-            RouterWidgetElems.SERVER_STOP: (
-                ":images/themes/default/mActionStop.svg",
-                "Stop the local Valhalla server",
-            ),
-        }.items():
-            self.server_layout.addWidget(add_btn(btn_name, icon, tip, False))
+                False,
+            )
+        )
+        # settings as a normal tool button, between start/stop and the combo
+        self.server_layout.addWidget(
+            add_btn(
+                RouterWidgetElems.SERVER_CONF.value,
+                ":images/themes/default/propertyicons/layerconfiguration.svg",
+                "Configure the local server",
+                False,
+            )
+        )
         self.ui_cmb_graphs = QComboBox(self)
         self.ui_cmb_graphs.setObjectName(RouterWidgetElems.SERVER_GRAPHS_COMBO.value)
         self.ui_cmb_graphs.setToolTip("List of locally available graphs")
         self.server_layout.addWidget(self.ui_cmb_graphs)
-        for btn_name, (icon, tip) in {
-            RouterWidgetElems.SERVER_CONF: (
-                ":images/themes/default/propertyicons/layerconfiguration.svg",
-                "Configure the local server",
+
+        # a tool button menu to save space
+        self.ui_btn_server_menu = QToolButton(self)
+        self.ui_btn_server_menu.setObjectName("ui_btn_server_menu")
+        self.ui_btn_server_menu.setIconSize(QSize(24, 24))
+        self.ui_btn_server_menu.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.ui_btn_server_menu.setAutoRaise(False)
+        self.ui_btn_server_menu.triggered.connect(self.ui_btn_server_menu.setDefaultAction)
+
+        server_menu = QMenu(self)
+        server_actions = []
+        for elem, icon, label, tip in (
+            (
+                RouterWidgetElems.SERVER_INFO,
+                ":images/themes/default/mActionPropertiesWidget.svg",
+                "Graph && server info",
+                "Show graph & server info",
             ),
-            RouterWidgetElems.SERVER_LOG: (
+            (
+                RouterWidgetElems.SERVER_LOG,
                 ":images/themes/default/mMessageLog.svg",
+                "Server log",
                 "View local server logs",
             ),
-        }.items():
-            self.server_layout.addWidget(add_btn(btn_name, icon, tip, False))
+        ):
+            action = QAction(get_icon(icon), label, self)
+            action.setObjectName(elem.value)
+            action.setToolTip(tip)
+            setattr(self, elem.value, action)
+            server_menu.addAction(action)
+            server_actions.append(action)
+
+        self.ui_btn_server_menu.setMenu(server_menu)
+        self.ui_btn_server_menu.setDefaultAction(server_actions[0])
+        self.server_layout.addWidget(self.ui_btn_server_menu)
+
+        # graph-extent as a normal tool button, right of the menu
+        self.server_layout.addWidget(
+            add_btn(
+                RouterWidgetElems.SERVER_GRAPH_EXTENT.value,
+                "graph_extent_icon.svg",
+                "Loads the current graph extent as polygon layer and checks for things like admins & tz dbs",
+                False,
+            )
+        )
 
         self.outer_layout.addRow("Local Server", self.server_layout)
 

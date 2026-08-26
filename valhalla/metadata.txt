@@ -1,11 +1,11 @@
 [general]
-name=Valhalla
+name=Network Analyst
 qgisMinimumVersion=4.0
 qgisMaximumVersion=4.99
 description=Valhalla routing, TSP, isochrones, matrix, map match, elevation & expansion calculations for QGIS
-version=5.0.2
-author=Nils Nolde
-email=nilsnolde@proton.me
+version=7.0.0
+author=routing.earth GmbH team
+email=community@routing.earth
 hasProcessingProvider=yes
 server=False
 
@@ -21,11 +21,11 @@ about=Valhalla provides access to most of the functions of the open-source Valha
         - use remote, tar'd Valhalla graphs as a data source, supporting HTTP basic auth
         - locally build graphs from OSM PBF files
 
-    For more information see https://github.com/nilsnolde/valhalla-qgis-plugin?tab=readme-ov-file#how-to.
+    For more information see https://github.com/routing-earth/network-analyst-qgis-plugin?tab=readme-ov-file#how-to.
 
-homepage=https://github.com/nilsnolde/valhalla-qgis-plugin
-tracker=https://github.com/nilsnolde/valhalla-qgis-plugin/issues
-repository=https://github.com/nilsnolde/valhalla-qgis-plugin
+homepage=https://github.com/routing-earth/network-analyst-qgis-plugin
+tracker=https://github.com/routing-earth/network-analyst-qgis-plugin/issues
+repository=https://github.com/routing-earth/network-analyst-qgis-plugin
 category=Web
 icon=resources/icons/valhalla_logo.svg
 tags=routing, OSM, openstreetmap, valhalla, isochrone, route, matrix, processing, expansion, mapmatch, elevation, expansion, tsp
@@ -35,6 +35,7 @@ deprecated=False
 
 # done by CI
 changelog=
+    - 7.0.0: Valhalla will become Network Analyst! Also gained support for https://routing-earth.com/software/ratatosk. Last major release!
     - 5.0.2: fixes an obnoxious settings unpickling bug: https://github.com/nilsnolde/valhalla-qgis-plugin/issues/59
     - 5.0.1: properly handle http 5xx codes; also triggered me to widen the public instance's timeout from 1 sec to 10 secs
     - 5.0.0: same as 4.3.3 (QGIS3 only), adapted for QGIS4 & PyQt6

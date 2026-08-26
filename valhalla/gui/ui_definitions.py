@@ -24,8 +24,9 @@ class RouterWidgetElems(str, Enum):
     TRUCK = "ui_btn_truck"
     MBIKE = "ui_btn_mbike"
     BUS = "ui_btn_bus"
-    SERVER_START = "ui_btn_server_start"
-    SERVER_STOP = "ui_btn_server_stop"
+    SERVER_START = "ui_btn_server_start"  # toggles start/stop with the process state
     SERVER_LOG = "ui_btn_server_log"
     SERVER_CONF = "ui_btn_server_conf"
+    SERVER_INFO = "ui_btn_server_info"  # graph/version info dialog (was ui_about_btn)
+    SERVER_GRAPH_EXTENT = "ui_btn_server_graph_extent"  # load graph extent (was ui_graph_btn)
     SERVER_GRAPHS_COMBO = "ui_cmb_graphs"
