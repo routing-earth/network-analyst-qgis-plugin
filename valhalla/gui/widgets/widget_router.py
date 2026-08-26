@@ -3,8 +3,8 @@ import platform
 
 from qgis.core import Qgis
 from qgis.PyQt.QtCore import QEvent, QFileSystemWatcher, QProcess, QSize
-from qgis.PyQt.QtGui import QAction
 from qgis.PyQt.QtWidgets import (
+    QAction,
     QButtonGroup,
     QComboBox,
     QFormLayout,

@@ -1,9 +1,9 @@
 [general]
 name=Network Analyst
-qgisMinimumVersion=4.0
-qgisMaximumVersion=4.99
+qgisMinimumVersion=3.4
+qgisMaximumVersion=3.99
 description=Valhalla routing, TSP, isochrones, matrix, map match, elevation & expansion calculations for QGIS
-version=6.0.0
+version=4.4.0
 author=routing.earth GmbH team
 email=community@routing.earth
 hasProcessingProvider=yes
@@ -35,7 +35,14 @@ deprecated=False
 
 # done by CI
 changelog=
-    - 6.0.0: Valhalla will become Network Analyst! Also gained support for https://routing-earth.com/software/ratatosk. Last major release!
-    - 5.0.2: fixes an obnoxious settings unpickling bug: https://github.com/nilsnolde/valhalla-qgis-plugin/issues/59
-    - 5.0.1: properly handle http 5xx codes; also triggered me to widen the public instance's timeout from 1 sec to 10 secs
-    - 5.0.0: same as 4.3.3 (QGIS3 only), adapted for QGIS4 & PyQt6
+    - 4.4.0: Valhalla will become Network Analyst! Also gained support for https://routing-earth.com/software/ratatosk. Last major release for QGIS 3! (QGIS 4 users get the parallel 6.0.0 release.)
+    - 4.3.5: fixes an obnoxious settings unpickling bug: https://github.com/nilsnolde/valhalla-qgis-plugin/issues/59
+    - 4.3.4: handle 5xx HTTP codes better; also extended the FOSSGIS service's timeout to 10 secs
+    - 4.3.3: reviewer won't relax on the silly "Password security issue", see https://gis.stackexchange.com/questions/500672/qgis-plugin-validation-false-alarm
+    - 4.3.2: remove shell=True & ignore false alarm about secrets detection
+    - 4.3.1: add X-Client-Id request header for valhalla monitoring
+    - 4.3.0: add support for /height & /trace_route
+    - 4.2.0: allow full Valhalla request JSON when extracting locations; manually install pyvalhalla package to not pollute QGIS python packages; add waypoint editor to map context menu; add Traveling Salesman
+    - 4.1.0: Add GeoTIFF support for isochrones
+    - 4.0.0: Introduce pyvalhalla and make all local calculations possible (currently restricted to Linux & OSX), might not be compatible with v3.0.0, see https://github.com/nilsnolde/valhalla-qgis-plugin/issues/30
+    - 3.0.0: Complete re-write from v2.x, for earlier changes refer to `valhalla/metadata.txt` in the [last 2.x commit](https://github.com/nilsnolde/valhalla-qgis-plugin/blob/78c2c71585f23beba796ee85f70b906dbe615f5a/valhalla/metadata.txt)

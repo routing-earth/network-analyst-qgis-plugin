@@ -17,12 +17,13 @@ from qgis.core import (  # noqa: F811
 from qgis.gui import QgisInterface, QgsDockWidget
 from qgis.PyQt import uic
 from qgis.PyQt.QtCore import QProcess, Qt, QTimer
-from qgis.PyQt.QtGui import QColor, QIcon, QKeySequence, QPainter, QPalette, QPixmap, QShortcut
+from qgis.PyQt.QtGui import QColor, QIcon, QKeySequence, QPainter, QPalette, QPixmap
 from qgis.PyQt.QtWidgets import (
     QAction,
     QLineEdit,
     QListWidget,
     QMenu,
+    QShortcut,
     QToolButton,
     QWidget,
 )
