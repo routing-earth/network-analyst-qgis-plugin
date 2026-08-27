@@ -180,8 +180,7 @@ else:
     PYTHON_EXE = Path(platform.__file__).parent.parent.joinpath("python").resolve()
 
 
-# json_url = the PyPI JSON endpoint for the version check (re-utils is on
-# test.pypi for now; flip to pypi.org once it's published there)
+# json_url = the PyPI JSON endpoint used for the version check
 PyPiPkg = namedtuple("PyPiPkg", ("import_name", "pypi_name", "url", "json_url"))
 PYVALHALLA_PKG = PyPiPkg(
     "valhalla",
@@ -192,8 +191,8 @@ PYVALHALLA_PKG = PyPiPkg(
 RE_UTILS_PKG = PyPiPkg(
     "routing_earth_utils",
     "routing-earth-utils",
-    "https://test.pypi.org/project/routing-earth-utils",
-    "https://test.pypi.org/pypi/routing-earth-utils/json",
+    "https://pypi.org/project/routing-earth-utils",
+    "https://pypi.org/pypi/routing-earth-utils/json",
 )
 PYPI_PKGS = (PYVALHALLA_PKG, RE_UTILS_PKG)
 

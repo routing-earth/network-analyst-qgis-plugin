@@ -29,12 +29,6 @@ from ..exceptions import ValhallaCmdError
 from ..global_definitions import PYTHON_EXE, PYVALHALLA_PKG, RE_UTILS_PKG, PyPiPkg, PyPiState
 from ..third_party.routingpy.routingpy import exceptions
 
-# test.pypi doesn't host re-utils' deps (cryptography, pyvalhalla) — pull the
-# package from there but let its deps resolve from real PyPI
-TESTPYPI_INDEX_ARGS = (
-    "--index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/"
-)
-
 
 class ResGroups(Enum):
     ICONS = "icons"
@@ -181,8 +175,7 @@ def install_routing_earth_utils(installed_state: PyPiState):
     deps = "cryptography" if sys.version_info >= (3, 14) else "cryptography backports.zstd"
     try:
         exec_cmd(
-            f'"{PYTHON_EXE}" -m pip install --target "{re_dir}" --no-deps '
-            f"{RE_UTILS_PKG.pypi_name} {TESTPYPI_INDEX_ARGS}"
+            f'"{PYTHON_EXE}" -m pip install --target "{re_dir}" --no-deps ' f"{RE_UTILS_PKG.pypi_name}"
         )
         exec_cmd(f'"{PYTHON_EXE}" -m pip install --target "{re_dir}" {deps}')
     except subprocess.CalledProcessError as e:
