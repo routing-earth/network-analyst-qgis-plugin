@@ -178,8 +178,8 @@ Behavior notes:
   `utils/resource_utils.py`). Unlike pyvalhalla (a self-contained wheel that's just unzipped)
   re-utils has deps, so it's `pip install --target <profile>/routing_earth_utils`: re-utils
   `--no-deps` (reuse the unpacked pyvalhalla) + `cryptography` (+ `backports.zstd` on py<3.14).
-  **On test.pypi for now** → `--index-url test.pypi --extra-index-url pypi.org` so deps
-  resolve from real PyPI; version check hits test.pypi's JSON API (`PyPiPkg.json_url`). The
+  **On real PyPI** (`PyPiPkg.json_url` → pypi.org's JSON API for the version check); the install
+  needs no custom index args — plain `pip install --no-deps routing-earth-utils`. The
   subprocess runs under `PYTHON_EXE` with `re_utils_root_dir()` + pyvalhalla dir prepended to
   PYTHONPATH (`re_process_env`, `os.pathsep`-joined — Windows-safe). The old `re_python`
   setting is gone.
