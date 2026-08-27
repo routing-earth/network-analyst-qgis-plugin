@@ -35,7 +35,7 @@ deprecated=False
 
 # done by CI
 changelog=
-    - 6.0.0: Valhalla will become Network Analyst! Also gained support for https://routing-earth.com/software/ratatosk. Last major release for QGIS 3! (QGIS 4 users get the parallel 6.0.0 release.)
+    - 6.0.0: Valhalla will become Network Analyst! Also gained support for https://routing-earth.com/software/ratatosk. Last major release for QGIS 3!
     - 4.3.5: fixes an obnoxious settings unpickling bug: https://github.com/nilsnolde/valhalla-qgis-plugin/issues/59
     - 4.3.4: handle 5xx HTTP codes better; also extended the FOSSGIS service's timeout to 10 secs
     - 4.3.3: reviewer won't relax on the silly "Password security issue", see https://gis.stackexchange.com/questions/500672/qgis-plugin-validation-false-alarm
