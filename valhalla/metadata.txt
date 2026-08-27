@@ -3,7 +3,7 @@ name=Network Analyst
 qgisMinimumVersion=4.0
 qgisMaximumVersion=4.99
 description=Valhalla routing, TSP, isochrones, matrix, map match, elevation & expansion calculations for QGIS
-version=7.0.0
+version=7.0.1
 author=routing.earth GmbH team
 email=community@routing.earth
 hasProcessingProvider=yes
@@ -37,7 +37,7 @@ deprecated=False
 
 # done by CI
 changelog=
-    - 7.0.0: Valhalla will become Network Analyst! Also gained support for https://routing-earth.com/software/ratatosk. Last major release!
+    - 7.0.1: Valhalla will become Network Analyst! Also gained support for https://routing-earth.com/software/ratatosk. Last major release!
     - 5.0.2: fixes an obnoxious settings unpickling bug: https://github.com/nilsnolde/valhalla-qgis-plugin/issues/59
     - 5.0.1: properly handle http 5xx codes; also triggered me to widen the public instance's timeout from 1 sec to 10 secs
     - 5.0.0: same as 4.3.3 (QGIS3 only), adapted for QGIS4 & PyQt6
