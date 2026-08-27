@@ -124,7 +124,7 @@ def re_process_env(api_key: str) -> QProcessEnvironment:
         if existing := env.value("PYTHONPATH"):
             paths.append(existing)
         env.insert("PYTHONPATH", os.pathsep.join(paths))
-    env.insert("ROUTING_EARTH_API_KEY", api_key)
+    env.insert("RE_API_KEY", api_key)
 
     return env
 
