@@ -200,7 +200,11 @@ def exec_cmd(cmd: str) -> subprocess.CompletedProcess:
     is_win = platform.system() == "Windows"
     cmd_split = shlex.split(cmd, posix=not is_win)
 
-    return subprocess.run(cmd_split, text=True, check=True, capture_output=True, shell=False)
+    # nosec B603 - shell=False with args from shlex.split of internal, non-user
+    # command strings (interpreter path + pip package names); no shell injection.
+    return subprocess.run(  # nosec B603
+        cmd_split, text=True, check=True, capture_output=True, shell=False
+    )
 
 
 def get_json_body(response: QgsNetworkReplyContent) -> dict:
