@@ -52,8 +52,10 @@ class LocalGraphController(QObject):
 
         self.valhalla_build_admins = make_build_process()
         self.valhalla_build_admins.finished.connect(self._on_admins_finished)
+        self.valhalla_build_admins.errorOccurred.connect(self._on_build_error)
         self.valhalla_build_tiles = make_build_process()
         self.valhalla_build_tiles.finished.connect(self._on_tiles_finished)
+        self.valhalla_build_tiles.errorOccurred.connect(self._on_build_error)
 
         # the build target, set when a build starts
         self._build_name = ""
@@ -146,13 +148,29 @@ class LocalGraphController(QObject):
             return
         self._build_name = name
         self._build_data_dir = self.from_pbf_dlg.data_dir
+        build_admins_exe = ValhallaSettings().get_binary_dir()
+        if build_admins_exe is None:
+            self._status_bar.pushMessage(
+                "pyvalhalla is not installed. Install it in the plugin settings first.",
+                Qgis.MessageLevel.Warning,
+                8,
+            )
+            return
+        build_admins_exe = build_admins_exe.joinpath("valhalla_build_admins")
+        if not build_admins_exe.is_file() or not os.access(build_admins_exe, os.X_OK):
+            self._status_bar.pushMessage(
+                f"Can't find executable {build_admins_exe}. Install pyvalhalla in the plugin settings first.",
+                Qgis.MessageLevel.Warning,
+                8,
+            )
+            return
+
         self._build_data_dir.mkdir(parents=True, exist_ok=True)
 
         inline_config = {
             "mjolnir": {"admin": str(self._build_data_dir.joinpath("admins.sqlite").resolve())}
         }
         args = ["-i", json.dumps(inline_config), self.from_pbf_dlg.pbf_path]
-        build_admins_exe = ValhallaSettings().get_binary_dir().joinpath("valhalla_build_admins")
         self.valhalla_build_admins.start(str(build_admins_exe.resolve()), args)
         self._status_bar.pushInfo("", "Started building admins...")
         self._log(
@@ -162,7 +180,7 @@ class LocalGraphController(QObject):
 
     def _on_admins_finished(self, exit_code: int, exit_status: QProcess.ExitStatus):
         self._log(f"Finished building admins with exit code {exit_code}")
-        if exit_status == QProcess.ExitStatus.CrashExit:
+        if exit_status == QProcess.ExitStatus.CrashExit or exit_code != 0:
             self._status_bar.pushMessage(
                 "Building admins failed, see log!", Qgis.MessageLevel.Critical, 0
             )
@@ -194,7 +212,7 @@ class LocalGraphController(QObject):
 
     def _on_tiles_finished(self, exit_code: int, exit_status: QProcess.ExitStatus):
         self._log(f"Finished building tiles with exit code {exit_code}")
-        if exit_status == QProcess.ExitStatus.CrashExit:
+        if exit_status == QProcess.ExitStatus.CrashExit or exit_code != 0:
             self._status_bar.pushMessage(
                 "Building tiles failed, see log!", Qgis.MessageLevel.Critical, 0
             )
@@ -216,3 +234,11 @@ class LocalGraphController(QObject):
 
     def _on_build_log_ready(self):
         self._log(self.sender().readAll().data().decode())
+
+    def _on_build_error(self, error: QProcess.ProcessError):
+        if error == QProcess.ProcessError.FailedToStart:
+            self._status_bar.pushMessage(
+                "Couldn't start the Valhalla graph build executable. Install pyvalhalla first.",
+                Qgis.MessageLevel.Critical,
+                0,
+            )
