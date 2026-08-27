@@ -11,7 +11,9 @@ server=False
 
 # End of mandatory metadata
 
-about=Valhalla provides access to most of the functions of the open-source Valhalla routing engine.
+about=TODO: rewrite to Network Analyst!
+
+    Valhalla provides access to most of the functions of the open-source Valhalla routing engine.
     The tool set includes routing, Traveling Salesman, isochrones, matrix, map match, elevation & expansion calculations, either interactive in the map canvas or from Point/LineString files within the processing framework.
     Extensive attributes are set for output files, incl. duration, length and start/end locations.
 

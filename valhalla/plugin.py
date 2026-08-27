@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from qgis.core import QgsApplication
 from qgis.gui import QgisInterface
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtCore import Qt, QTimer
 from qgis.PyQt.QtWidgets import QAction, QMenu, QToolBar
 
 from . import PLUGIN_NAME
@@ -69,8 +69,13 @@ class ValhallaPlugin:
         self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.routing_dock)
         self.routing_dock.setVisible(True)
 
-        # one-shot "Valhalla is now Network Analyst" notice (see the module)
-        maybe_show_rebrand_notice(self.iface.mainWindow())
+        # one-shot "Valhalla is now Network Analyst" notice (see the module).
+        # Deferred onto the event loop AND shown non-modally so it never blocks
+        # QGIS startup — initGui() must return promptly while plugins load.
+        # Keep a reference so the non-modal dialog isn't garbage-collected.
+        QTimer.singleShot(
+            0, lambda: setattr(self, "_rebrand_dlg", maybe_show_rebrand_notice(self.iface.mainWindow()))
+        )
 
     def unload(self):
         """Unload the user interface."""

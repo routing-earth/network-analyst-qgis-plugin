@@ -6,7 +6,6 @@ on:
   push:
     branches:
       - qgis-v3
-      - master
     paths-ignore:
       - '*.md'
       - '*.sh'
@@ -15,7 +14,6 @@ on:
   pull_request:
     branches:
       - qgis-v3
-      - master
 
 env:
   PLUGIN_PATH: valhalla

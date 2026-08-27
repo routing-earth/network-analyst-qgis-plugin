@@ -32,16 +32,26 @@ def _as_zero_tuple(version: str) -> tuple:
         return (0, 0, 0)
 
 
-def maybe_show_rebrand_notice(parent=None) -> None:
+def maybe_show_rebrand_notice(parent=None):
     """Show the notice once if we're crossing (or landing fresh on) the rename,
-    then record the current version so it doesn't show again."""
+    then record the current version so it doesn't show again.
+
+    Returns the dialog (shown non-modally) so the caller can keep it alive, or
+    ``None`` when nothing is shown. A non-modal ``show()`` — never ``exec()`` —
+    is deliberate: this runs at QGIS startup and a modal loop would freeze it.
+    """
     settings = ValhallaSettings()
     last_seen = settings.get(Dialogs.SETTINGS, LAST_SEEN_KEY)
 
+    dlg = None
     if _as_zero_tuple(last_seen) < REBRAND_VERSION:
-        RebrandNoticeDialog(parent).exec()
+        dlg = RebrandNoticeDialog(parent)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dlg.show()
+        dlg.raise_()
 
     settings.set(Dialogs.SETTINGS, LAST_SEEN_KEY, __version__)
+    return dlg
 
 
 class RebrandNoticeDialog(QDialog):
