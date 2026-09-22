@@ -78,7 +78,7 @@ It features:
 ## Notes on `localhost`
 
 > [!NOTE]
-> Integration of `pyvalhalla` is only available for Linux x64 & OSX arm64. For Windows x64 I [couldn't make `valhalla_service` work yet](https://github.com/valhalla/valhalla/issues/5314).
+> Integration of `pyvalhalla` works on Linux x64, OSX arm64 & Windows x64 (Windows since `pyvalhalla` 3.9.0, which finally ships a working `valhalla_service.exe`, see https://github.com/valhalla/valhalla/issues/5314).
 
 The main distinguishing features of this plugin (compared to other routing plugins) is the ability to:
 

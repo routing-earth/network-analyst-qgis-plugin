@@ -3,8 +3,10 @@ import json
 import os
 from enum import Enum
 from pathlib import Path
+from typing import Optional
 
 from qgis.core import QgsNetworkReplyContent
+from qgis.PyQt.QtCore import QProcessEnvironment
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtNetwork import QNetworkReply, QNetworkRequest
 
@@ -13,6 +15,10 @@ from ..core.settings import ValhallaSettings, get_settings_dir
 from ..third_party.routingpy.routingpy import exceptions
 
 IS_WIN = os.name == "nt"
+EXE_SUFFIX = ".exe" if IS_WIN else ""
+# the windows pyvalhalla wheel is delvewheel-repaired: the vendored DLLs live in
+# a dir next to the package, which the executables only find via PATH
+WIN_LIBS_DIR = "pyvalhalla.libs"
 
 
 class ResGroups(Enum):
@@ -132,25 +138,65 @@ def create_valhalla_config(force=False):
         json.dump(config, f, indent=2)
 
 
+def get_valhalla_exe(name: str) -> Optional[Path]:
+    """
+    The absolute path of a valhalla executable (``valhalla_service``,
+    ``valhalla_build_tiles``, ...) inside the configured binary dir, with the
+    platform's executable suffix appended. None if no binary dir is configured.
+    The path is not checked for existence, see :func:`is_valhalla_exe`.
+    """
+    binary_dir = ValhallaSettings().get_binary_dir()
+    if binary_dir is None:
+        return None
+
+    return binary_dir.joinpath(name + EXE_SUFFIX).resolve()
+
+
+def is_valhalla_exe(exe_path: Optional[Path]) -> bool:
+    """Whether ``exe_path`` is an existing file this platform can execute."""
+    if exe_path is None or not exe_path.is_file():
+        return False
+
+    if IS_WIN:
+        pathext = os.environ.get("PATHEXT", "")
+        return exe_path.suffix.lower() in (ext.lower() for ext in pathext.split(";"))
+
+    return os.access(exe_path, os.X_OK)
+
+
+def valhalla_env() -> dict:
+    """
+    The environment to run a valhalla executable in. On Windows the wheel's
+    vendored DLLs sit in ``pyvalhalla.libs`` beside the package and the
+    executables can only pick them up from PATH (the python bindings do it
+    themselves via ``os.add_dll_directory``, the binaries can't). Everywhere
+    else this is just a copy of our own environment.
+    """
+    env = dict(os.environ)
+    if not IS_WIN:
+        return env
+
+    binary_dir = ValhallaSettings().get_binary_dir()
+    # <pyvalhalla root>/valhalla/bin -> <pyvalhalla root>/pyvalhalla.libs
+    if binary_dir and (libs_dir := binary_dir.parent.parent.joinpath(WIN_LIBS_DIR)).is_dir():
+        paths = [str(libs_dir.resolve()), env.get("PATH", "")]
+        env["PATH"] = os.pathsep.join(p for p in paths if p)
+
+    return env
+
+
+def valhalla_process_env() -> QProcessEnvironment:
+    """:func:`valhalla_env` for a QProcess."""
+    env = QProcessEnvironment()
+    for key, value in valhalla_env().items():
+        env.insert(key, value)
+
+    return env
+
+
 def check_valhalla_installation() -> bool:
-    current_bin_dir = ValhallaSettings().get_binary_dir()
-    program = "valhalla_service" if not IS_WIN else "valhalla_service.exe"
-
-    if current_bin_dir is None:
-        return False
-    elif not current_bin_dir.exists():
-        return False
-    elif (valhalla_exe := current_bin_dir.joinpath(program)).exists():
-        if not valhalla_exe.is_file():
-            return False
-
-        if IS_WIN:
-            pathext = os.environ.get("PATHEXT", "")
-            return valhalla_exe.suffix.lower() in (ext.lower() for ext in pathext.split(";"))
-        else:
-            return os.access(valhalla_exe, os.X_OK)
-
-    return False
+    """Whether the configured binary dir holds a runnable ``valhalla_service``."""
+    return is_valhalla_exe(get_valhalla_exe("valhalla_service"))
 
 
 def get_default_valhalla_binary_dir() -> Path:

@@ -4,7 +4,7 @@ Notes for future Claude sessions working in this repo. Keep terse and current �
 
 ## What this is
 
-QGIS plugin for the [Valhalla routing engine](https://github.com/valhalla/valhalla). Provides routing, isochrones, matrix, map-match, elevation, expansion, and TSP — both as interactive map tools and Processing algorithms — for car/bike/pedestrian/truck/motorbike profiles. Talks to remote Valhalla HTTP servers (FOSSGIS public, custom URLs) or runs Valhalla locally via the [`pyvalhalla`](https://pypi.org/project/pyvalhalla/) Python package (Linux/macOS only — Windows is HTTP-only).
+QGIS plugin for the [Valhalla routing engine](https://github.com/valhalla/valhalla). Provides routing, isochrones, matrix, map-match, elevation, expansion, and TSP — both as interactive map tools and Processing algorithms — for car/bike/pedestrian/truck/motorbike profiles. Talks to remote Valhalla HTTP servers (FOSSGIS public, custom URLs) or runs Valhalla locally via the [`pyvalhalla`](https://pypi.org/project/pyvalhalla/) Python package (all of Linux/macOS/Windows since pyvalhalla 3.9.0).
 
 ### Branding: "Valhalla" → "Network Analyst" (v6.0.0 rename)
 
@@ -264,6 +264,32 @@ may spawn a python or call pip — `PYTHON_EXE` (the old, macOS-broken constant 
   `check_valhalla_installation`, since the pyvalhalla version is read off `valhalla_service
   --version` in whatever `get_binary_dir()` points at — deliberately, so a custom binary dir
   reports its own build). Never the reverse.
+
+## Running the valhalla binaries (all three platforms since pyvalhalla 3.9.0)
+
+Windows is **no longer** HTTP-only: the win_amd64 pyvalhalla wheel ships
+`valhalla_service.exe`/`valhalla_build_{admins,tiles}.exe`, so the local server, the graph
+combo and the PBF build are enabled everywhere. There is no `platform.system()` gate left in
+the GUI — don't reintroduce one.
+
+Two Windows-only facts make this work, both hidden behind helpers in `utils/resource_utils.py`
+(the single place that knows how to name and launch a valhalla binary):
+
+- `get_valhalla_exe(name)` appends `EXE_SUFFIX` (`.exe` on nt) to a name inside
+  `get_binary_dir()`; `is_valhalla_exe(path)` is the runnable check (PATHEXT on win,
+  `os.access(X_OK)` elsewhere). `check_valhalla_installation()` is just those two over
+  `valhalla_service`. Never hand-concatenate `.exe` at a call site again.
+- **The wheel is delvewheel-repaired**: the vendored DLLs live in
+  `<pyvalhalla root>/pyvalhalla.libs`, i.e. NOT next to the exes in `valhalla/bin/`. The python
+  bindings fix that themselves (`os.add_dll_directory` in the patched `valhalla/__init__.py`),
+  but the **executables can only find them via PATH**. So every launch goes through
+  `valhalla_env()` (dict, for `subprocess`) / `valhalla_process_env()` (QProcessEnvironment, for
+  QProcess), which prepend that dir on Windows and are a plain env copy elsewhere. Call sites:
+  `widget_router._on_server_start` (re-set on every start — the binary dir may have moved),
+  `graph_ops_local` (both build processes), `pypi.installed_version` (the
+  `valhalla_service --version` probe — it silently returns None without the DLLs).
+  The `re` CLI subprocess needs nothing extra: it *imports* pyvalhalla, so the delvewheel patch
+  runs (see `routing_earth.re_process_env`).
 
 ## Known PyQt6 gotchas (already hit during the v4 port)
 
