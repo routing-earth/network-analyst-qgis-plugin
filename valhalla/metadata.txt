@@ -3,7 +3,7 @@ name=Network Analyst
 qgisMinimumVersion=3.4
 qgisMaximumVersion=3.99
 description=Valhalla routing, TSP, isochrones, matrix, map match, elevation & expansion calculations for QGIS
-version=6.0.1
+version=6.1.0
 author=routing.earth GmbH team
 email=community@routing.earth
 hasProcessingProvider=yes
@@ -37,6 +37,7 @@ deprecated=False
 
 # done by CI
 changelog=
+    - 6.1.0: Unlock Windows and hopefully repair macos; rework Python executable discovery & pip install flow
     - 6.0.1: Valhalla will become Network Analyst! Also gained support for https://routing-earth.com/software/ratatosk and for the local Valhalla service & graph builds on Windows. Last major release for QGIS 3!
     - 4.3.5: fixes an obnoxious settings unpickling bug: https://github.com/nilsnolde/valhalla-qgis-plugin/issues/59
     - 4.3.4: handle 5xx HTTP codes better; also extended the FOSSGIS service's timeout to 10 secs
