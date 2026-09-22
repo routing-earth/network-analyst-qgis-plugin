@@ -1,5 +1,4 @@
 import json
-import platform
 
 from qgis.core import Qgis
 from qgis.PyQt.QtCore import QEvent, QFileSystemWatcher, QProcess, QSize
@@ -28,6 +27,8 @@ from ...utils.resource_utils import (
     create_valhalla_config,
     get_icon,
     get_valhalla_config_path,
+    get_valhalla_exe,
+    valhalla_process_env,
 )
 from ..ui_definitions import ID_JSON, RouterWidgetElems
 
@@ -63,22 +64,10 @@ class RouterWidget(QWidget):
         self.mode_btns.buttonToggled.connect(self._on_profile_change)
         self.ui_btn_prov_options.clicked.connect(self._on_btn_prov_options_clicked)
 
-        # TODO: https://github.com/kevinkreiser/prime_server/pull/137
-        # Windows has no service support yet, so no need to enable local servers
-        if platform.system() == "Windows":
-            self.ui_btn_server_start.setEnabled(False)
-            self.ui_btn_server_log.setEnabled(False)
-            self.ui_btn_server_conf.setEnabled(False)
-            self.ui_cmb_graphs.setEnabled(False)
-            # local server unsupported: only the info action is meaningful, so
-            # make it the default (clicked) action of the menu button
-            self.ui_btn_server_menu.setDefaultAction(self.ui_btn_server_info)
-            return
-
-        # below ONLY for linux/osx
-
-        # the process which will start a local valhalla server
+        # the process which will start a local valhalla server; pyvalhalla ships
+        # valhalla_service for all 3 platforms since 3.9.0, so no gating here
         self.valhalla_service = QProcess(self)
+        self.valhalla_service.setProcessEnvironment(valhalla_process_env())
         self.valhalla_service.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self.dlg_server_log = ServerLogDialog()
 
@@ -192,7 +181,6 @@ class RouterWidget(QWidget):
         self.dlg_server_log.text_log.append(log)
 
     def _on_server_start(self):
-        binary_dir = ValhallaSettings().get_binary_dir()
         no_binary_dir = False
         msg = ""
         if not check_valhalla_installation():
@@ -223,8 +211,11 @@ class RouterWidget(QWidget):
 
         # need to run the executable directly
         # with "python -m valhalla xxx" it'd run 2 processes and only kill the first/outer one
-        valhalla_service = binary_dir.joinpath("valhalla_service")
-        self.valhalla_service.start(str(valhalla_service.resolve()), args)
+        valhalla_service = get_valhalla_exe("valhalla_service")
+        # the binary dir may have changed since __init__ (settings dialog), and
+        # with it the DLL dir windows needs on PATH
+        self.valhalla_service.setProcessEnvironment(valhalla_process_env())
+        self.valhalla_service.start(str(valhalla_service), args)
         self.dlg_server_log.text_log.append(
             f"Started {valhalla_service} with PID {self.valhalla_service.processId()}..."
         )

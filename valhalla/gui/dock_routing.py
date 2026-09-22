@@ -130,9 +130,7 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         self._blink_timer = QTimer(self)
         self._blink_timer.setInterval(750)
         self._blink_timer.timeout.connect(self._on_server_blink)
-        # no valhalla_service on Windows (no local server support)
-        if hasattr(self.router_widget, "valhalla_service"):
-            self.router_widget.valhalla_service.stateChanged.connect(self._on_server_state_changed)
+        self.router_widget.valhalla_service.stateChanged.connect(self._on_server_state_changed)
 
         # connections
         self.menu_widget.currentRowChanged["int"].connect(self._on_menu_change)
@@ -539,11 +537,11 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         routing_menu.addAction(clear_pts)
 
     def unload(self):
-        # don't leave an orphaned valhalla server behind on plugin
-        # reload/unload or QGIS shutdown (no valhalla_service on Windows);
-        # wait briefly so the port is free again for a reloaded instance
-        service = getattr(self.router_widget, "valhalla_service", None)
-        if service is not None and service.state() != QProcess.ProcessState.NotRunning:
+        # don't leave an orphaned valhalla server behind on plugin reload/unload
+        # or QGIS shutdown; wait briefly so the port is free again for a
+        # reloaded instance
+        service = self.router_widget.valhalla_service
+        if service.state() != QProcess.ProcessState.NotRunning:
             self.router_widget._on_server_stop()
             service.waitForFinished(2000)
 

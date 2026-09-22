@@ -32,9 +32,8 @@ from qgis.PyQt.QtCore import QUrl
 from qgis.PyQt.QtNetwork import QNetworkReply, QNetworkRequest
 
 from ..exceptions import PyPiError
-from ..utils.resource_utils import check_valhalla_installation
+from ..utils.resource_utils import check_valhalla_installation, get_valhalla_exe, valhalla_env
 from .routing_earth import pyvalhalla_root_dir, re_utils_root_dir
-from .settings import ValhallaSettings
 
 # json_url = the PyPI JSON endpoint used for the version check
 PyPiPkg = namedtuple("PyPiPkg", ("import_name", "pypi_name", "url", "json_url"))
@@ -85,12 +84,15 @@ _CMD_TIMEOUT = 20
 _LOG_HINT = "see the log panel for the full output"
 
 
-def run_cmd(argv: Sequence, timeout: Optional[int] = None) -> subprocess.CompletedProcess:
+def run_cmd(
+    argv: Sequence, timeout: Optional[int] = None, env: Optional[dict] = None
+) -> subprocess.CompletedProcess:
     """
     Runs argv and returns the completed process.
 
     :param argv: the full argv as list of
     :param timeout: seconds before the child is killed, None for no limit
+    :param env: the child's environment, None for ours
     :raises PyPiError: on a non-zero exit, a timeout or a failure to start
     """
     argv = [str(a) for a in argv]
@@ -103,6 +105,7 @@ def run_cmd(argv: Sequence, timeout: Optional[int] = None) -> subprocess.Complet
             check=True,
             capture_output=True,
             timeout=timeout,
+            env=env,
             # keeps win from flashing a console window
             **({} if not IS_WIN else {"creationflags": subprocess.CREATE_NO_WINDOW}),
         )
@@ -117,10 +120,10 @@ def run_cmd(argv: Sequence, timeout: Optional[int] = None) -> subprocess.Complet
         raise PyPiError(f"Couldn't run {program}: {e}", detail=f"{' '.join(argv)}\n\n{e}")
 
 
-def _run_cmd(argv: Sequence) -> Optional[str]:
+def _run_cmd(argv: Sequence, env: Optional[dict] = None) -> Optional[str]:
     """internal one which doesn't raise"""
     try:
-        return run_cmd(argv, timeout=_CMD_TIMEOUT).stdout.strip()
+        return run_cmd(argv, timeout=_CMD_TIMEOUT, env=env).stdout.strip()
     except PyPiError:
         return None
 
@@ -269,10 +272,8 @@ def installed_version(pkg: PyPiPkg = PYVALHALLA_PKG) -> Optional[str]:
     if not check_valhalla_installation():
         return None
 
-    ext = ".exe" if IS_WIN else ""
-    exe_path = ValhallaSettings().get_binary_dir().joinpath(f"valhalla_service{ext}")
-
-    return _run_cmd([exe_path.absolute(), "--version"]) or None
+    # on windows the binary needs the wheel's DLL dir on PATH to even start
+    return _run_cmd([get_valhalla_exe("valhalla_service"), "--version"], env=valhalla_env()) or None
 
 
 def is_installed(pkg: PyPiPkg) -> bool:

@@ -16,7 +16,7 @@ from qgis.PyQt.QtCore import QDir, QObject, QProcess
 from qgis.PyQt.QtWidgets import QDialog, QFileDialog
 
 from ...core import graph_registry
-from ...core.settings import ValhallaSettings
+from ...utils.resource_utils import get_valhalla_exe, is_valhalla_exe, valhalla_process_env
 from ..dlg_graph_from_pbf import GraphFromPBFDialog
 from ..dlg_graph_from_url import GraphFromURLDialog
 
@@ -148,7 +148,7 @@ class LocalGraphController(QObject):
             return
         self._build_name = name
         self._build_data_dir = self.from_pbf_dlg.data_dir
-        build_admins_exe = ValhallaSettings().get_binary_dir()
+        build_admins_exe = get_valhalla_exe("valhalla_build_admins")
         if build_admins_exe is None:
             self._status_bar.pushMessage(
                 "pyvalhalla is not installed. Install it in the plugin settings first.",
@@ -156,8 +156,7 @@ class LocalGraphController(QObject):
                 8,
             )
             return
-        build_admins_exe = build_admins_exe.joinpath("valhalla_build_admins")
-        if not build_admins_exe.is_file() or not os.access(build_admins_exe, os.X_OK):
+        if not is_valhalla_exe(build_admins_exe):
             self._status_bar.pushMessage(
                 f"Can't find executable {build_admins_exe}. Install pyvalhalla in the plugin settings first.",
                 Qgis.MessageLevel.Warning,
@@ -171,7 +170,9 @@ class LocalGraphController(QObject):
             "mjolnir": {"admin": str(self._build_data_dir.joinpath("admins.sqlite").resolve())}
         }
         args = ["-i", json.dumps(inline_config), self.from_pbf_dlg.pbf_path]
-        self.valhalla_build_admins.start(str(build_admins_exe.resolve()), args)
+        # windows needs the wheel's DLL dir on PATH, see valhalla_process_env()
+        self.valhalla_build_admins.setProcessEnvironment(valhalla_process_env())
+        self.valhalla_build_admins.start(str(build_admins_exe), args)
         self._status_bar.pushInfo("", "Started building admins...")
         self._log(
             f"Executing {self.valhalla_build_admins.program()} "
@@ -202,8 +203,9 @@ class LocalGraphController(QObject):
             str(self.from_pbf_dlg.ui_int_threads.value() or os.cpu_count()),
             self.from_pbf_dlg.pbf_path,
         ]
-        build_tiles_exe = ValhallaSettings().get_binary_dir().joinpath("valhalla_build_tiles")
-        self.valhalla_build_tiles.start(str(build_tiles_exe.resolve()), args)
+        build_tiles_exe = get_valhalla_exe("valhalla_build_tiles")
+        self.valhalla_build_tiles.setProcessEnvironment(valhalla_process_env())
+        self.valhalla_build_tiles.start(str(build_tiles_exe), args)
         self._status_bar.pushInfo("", "Started building graph tiles...")
         self._log(
             f"Executing {self.valhalla_build_tiles.program()} "
