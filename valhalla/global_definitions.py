@@ -1,7 +1,4 @@
-import platform
-from collections import namedtuple
 from enum import Enum
-from pathlib import Path
 from typing import Dict, Tuple
 
 from qgis.core import QgsField
@@ -170,37 +167,6 @@ SETTINGS_WIDGETS_MAP = {
         "ui_name": "settings_valhalla_bus",
     },
 }
-
-# determine the python executable path from a random std lib
-if platform.system() == "Linux":
-    PYTHON_EXE = "python3"
-elif platform.system() == "Windows":
-    PYTHON_EXE = Path(platform.__file__).parent.parent.joinpath("python.exe").resolve()
-else:
-    PYTHON_EXE = Path(platform.__file__).parent.parent.joinpath("python").resolve()
-
-
-# json_url = the PyPI JSON endpoint used for the version check
-PyPiPkg = namedtuple("PyPiPkg", ("import_name", "pypi_name", "url", "json_url"))
-PYVALHALLA_PKG = PyPiPkg(
-    "valhalla",
-    "pyvalhalla",
-    "https://pypi.org/project/pyvalhalla",
-    "https://pypi.org/pypi/pyvalhalla/json",
-)
-RE_UTILS_PKG = PyPiPkg(
-    "routing_earth_utils",
-    "routing-earth-utils",
-    "https://pypi.org/project/routing-earth-utils",
-    "https://pypi.org/pypi/routing-earth-utils/json",
-)
-PYPI_PKGS = (PYVALHALLA_PKG, RE_UTILS_PKG)
-
-
-class PyPiState(Enum):
-    NOT_INSTALLED = 0
-    UPGRADEABLE = 1
-    UP_TO_DATE = 2
 
 
 class SpOptTypes(str, Enum):

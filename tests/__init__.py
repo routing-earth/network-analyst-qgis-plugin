@@ -6,15 +6,13 @@ from urllib.parse import urlparse
 
 from tests.utilities import get_qgis_app
 
-from valhalla.global_definitions import PyPiState
-
 QGIS_APP, CANVAS, IFACE, PARENT = get_qgis_app()
 
+from valhalla.core.pypi import PYVALHALLA_PKG, PyPiState, install
 from valhalla.core.settings import ValhallaSettings, get_settings_dir
 from valhalla.utils.resource_utils import (
     check_valhalla_installation,
     get_default_valhalla_binary_dir,
-    install_pyvalhalla,
 )
 
 URL = "http://localhost:8002"
@@ -87,7 +85,7 @@ class LocalhostPluginTestCase(unittest.TestCase):
 
         ValhallaSettings().set_binary_dir(get_default_valhalla_binary_dir())
         if not check_valhalla_installation():
-            install_pyvalhalla(PyPiState.NOT_INSTALLED)
+            install(PYVALHALLA_PKG, PyPiState.NOT_INSTALLED)
             if not check_valhalla_installation():
                 raise ImportError(
                     f"pyvalhalla for {cls.__name__} to {get_default_valhalla_binary_dir()}"
