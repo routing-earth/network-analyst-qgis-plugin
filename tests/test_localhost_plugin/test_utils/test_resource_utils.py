@@ -3,9 +3,8 @@ from pathlib import Path
 
 from packaging.version import Version
 
-from valhalla.global_definitions import PyPiState
+from valhalla.core.pypi import PYVALHALLA_PKG, PyPiState, check_state
 from valhalla.utils.resource_utils import (
-    check_local_lib_version,
     check_valhalla_installation,
     create_valhalla_config,
     get_default_valhalla_binary_dir,
@@ -18,10 +17,10 @@ from ... import LocalhostPluginTestCase
 class TestResourceUtils(LocalhostPluginTestCase):
     def test_local_lib_version(self):
         # it's the second attribute that will do it
-        v = check_local_lib_version(Version("0.0.0"))
+        v = check_state(PYVALHALLA_PKG, Version("0.0.0"))
         self.assertEqual(v, PyPiState.UP_TO_DATE)
 
-        v = check_local_lib_version(Version("99.99.99"))
+        v = check_state(PYVALHALLA_PKG, Version("99.99.99"))
         self.assertEqual(v, PyPiState.UPGRADEABLE)
 
     def test_create_valhalla_config_failure(self):

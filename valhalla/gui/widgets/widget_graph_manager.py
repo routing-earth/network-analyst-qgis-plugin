@@ -83,8 +83,6 @@ class GraphManagerWidget(QWidget):
                 proc.kill()
                 proc.waitForFinished(2000)
 
-    # ---------------- UI assembly ----------------
-
     def _setup_ui(self):
         # API key (auth database) + API URL row
         self.ui_text_api_key = QgsPasswordLineEdit(self)
@@ -333,7 +331,7 @@ class GraphManagerWidget(QWidget):
 
     def _on_remove(self):
         entry = self._selected_entry()
-        if entry is None:  # button is disabled then, belt & braces
+        if entry is None:  # button is disabled then
             return
 
         # the graph is self-contained: removing the entry removes its data
