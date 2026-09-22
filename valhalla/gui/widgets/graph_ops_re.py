@@ -17,9 +17,10 @@ from qgis.PyQt.QtCore import QObject, QProcess
 from qgis.PyQt.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
 from ...core import graph_registry
+from ...core.pypi import RE_UTILS_PKG, is_installed, python_exe
 from ...core.routing_earth import Entitlement, get_re_api_key, re_cli_args, re_process_env
 from ...core.settings import get_settings_dir
-from ...global_definitions import PYTHON_EXE
+from ...exceptions import PyPiError
 
 
 class RoutingEarthController(QObject):
@@ -50,16 +51,37 @@ class RoutingEarthController(QObject):
         self.proc.setWorkingDirectory(str(get_settings_dir()))
         self.proc.readyReadStandardOutput.connect(self._on_log_ready)
         self.proc.finished.connect(self._on_proc_finished)
+        self.proc.errorOccurred.connect(self._on_proc_error)
 
     # ---------------- subprocess plumbing ----------------
 
     def _run_re(self, args: List[str], on_done: Callable[[int], None]) -> bool:
-        """Starts one CLI invocation; False if busy or the API key is missing."""
+        """
+        Starts one CLI invocation; False if busy, if the API key is missing or
+        if the interpreter/routing-earth-utils aren't there to run it with.
+        """
         if self.proc.state() != QProcess.ProcessState.NotRunning:
             self._status_bar.pushWarning(
                 "Busy", "Another routing.earth operation is running, try again after it finished..."
             )
             return False
+
+        # without these the subprocess would just die with a ModuleNotFoundError
+        # (or not start at all) somewhere in the log pane
+        if not is_installed(RE_UTILS_PKG):
+            self._status_bar.pushMessage(
+                f"{RE_UTILS_PKG.pypi_name} is not installed, install it in the dependencies first",
+                Qgis.MessageLevel.Critical,
+                6,
+            )
+            return False
+        try:
+            exe = str(python_exe())
+        except PyPiError as e:
+            self._log(e.detail)
+            self._status_bar.pushMessage(str(e), Qgis.MessageLevel.Critical, 0)
+            return False
+
         api_key = get_re_api_key()
         if not api_key:
             self._status_bar.pushMessage(
@@ -72,7 +94,7 @@ class RoutingEarthController(QObject):
         self._proc_buf = ""
         self._on_proc_done = on_done
         self.proc.setProcessEnvironment(re_process_env(api_key))
-        self.proc.start(str(PYTHON_EXE), args)
+        self.proc.start(exe, args)
         self._log(f"Executing re {' '.join(args[2:])}")
         return True
 
@@ -80,6 +102,18 @@ class RoutingEarthController(QObject):
         log = self.proc.readAll().data().decode()
         self._proc_buf += log
         self._log(log.rstrip("\n"))
+
+    def _on_proc_error(self, error: QProcess.ProcessError):
+        """
+        `finished` is never emitted for a process that didn't start, so drop the
+        pending callback here — otherwise the controller stays 'busy' forever.
+        """
+        if error != QProcess.ProcessError.FailedToStart:
+            return
+        self._on_proc_done = None
+        msg = f"Couldn't start {self.proc.program()}: {self.proc.errorString()}"
+        self._log(msg)
+        self._status_bar.pushMessage(msg, Qgis.MessageLevel.Critical, 0)
 
     def _on_proc_finished(self, exit_code: int, exit_status: QProcess.ExitStatus):
         on_done, self._on_proc_done = self._on_proc_done, None
@@ -165,12 +199,12 @@ class RoutingEarthController(QObject):
             self._status_bar.pushInfo("", f"Started seeding {scope}/{cadence}, this can take a while...")
 
     def _confirm_download(self, scope: str, cadence: str, ent: Entitlement) -> bool:
-        dl = graph_registry.human_size(ent.compressed_size_bytes)
-        disk = graph_registry.human_size(ent.size_bytes)
-        if dl and disk:
-            size_note = f" (~{dl} download, ~{disk} on disk)"
-        elif dl:
-            size_note = f" (~{dl} download)"
+        size_compressed = graph_registry.human_size(ent.compressed_size_bytes)
+        size_disk = graph_registry.human_size(ent.size_bytes)
+        if size_compressed and size_disk:
+            size_note = f" (~{size_compressed} download, ~{size_disk} on disk)"
+        elif size_compressed:
+            size_note = f" (~{size_compressed} download)"
         else:
             size_note = ""
         return (

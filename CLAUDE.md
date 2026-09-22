@@ -37,6 +37,7 @@ valhalla/                       # plugin source root (this is what gets shipped)
 │   ├── http/router_client.py   # async HTTP via QgsNetworkAccessManager; sets X-Client-Id
 │   ├── results_factory.py      # parses Valhalla responses into QGIS layers
 │   ├── graph_registry.py       # the graph library API (over graph_dir) — see "Graphs" below
+│   ├── pypi.py                 # interpreter/pip/PyPI handler — see "Dependencies" below
 │   ├── routing_earth.py        # routing-earth.com client plumbing (subprocess/auth/HTTP)
 │   └── settings.py             # ValhallaSettings (QSettings-backed)
 ├── gui/
@@ -174,21 +175,95 @@ Behavior notes:
   `<graph_dir>/<scope>_<cadence>/`. Wildcard `*` shows as-is (no size; prompts for a region on
   download). Available rows are in-memory only.
 - **Install (like pyvalhalla):** the plugin installs `routing-earth-utils` itself from the
-  deps table (`dlg_plugin_settings` → `install_pkg` → `install_routing_earth_utils` in
-  `utils/resource_utils.py`). Unlike pyvalhalla (a self-contained wheel that's just unzipped)
-  re-utils has deps, so it's `pip install --target <profile>/routing_earth_utils`: re-utils
-  `--no-deps` (reuse the unpacked pyvalhalla) + `cryptography` (+ `backports.zstd` on py<3.14).
-  **On real PyPI** (`PyPiPkg.json_url` → pypi.org's JSON API for the version check); the install
-  needs no custom index args — plain `pip install --no-deps routing-earth-utils`. The
-  subprocess runs under `PYTHON_EXE` with `re_utils_root_dir()` + pyvalhalla dir prepended to
-  PYTHONPATH (`re_process_env`, `os.pathsep`-joined — Windows-safe). The old `re_python`
-  setting is gone.
+  deps table (`dlg_plugin_settings` → `core/pypi.install`). Unlike pyvalhalla (a self-contained
+  wheel that's just unzipped) re-utils has deps, so it's `pip install --target
+  <profile>/routing_earth_utils`: re-utils `--no-deps` (reuse the unpacked pyvalhalla) +
+  `cryptography` (+ `backports.zstd` on py<3.14). **On real PyPI** (`PyPiPkg.json_url` →
+  pypi.org's JSON API for the version check); the install needs no custom index args — plain
+  `pip install --no-deps routing-earth-utils`. The subprocess runs under `pypi.python_exe()`
+  with `re_utils_root_dir()` + pyvalhalla dir prepended to PYTHONPATH (`re_process_env`,
+  `os.pathsep`-joined — Windows-safe). The old `re_python` setting is gone.
 - **Auth:** API key in the QGIS auth database (`APIHeader` config, id in `re_authcfg`);
   passed via env `ROUTING_EARTH_API_KEY`, never argv/QSettings. API origin override:
   `re_api_url` (default https://routing-earth.com).
 - **Protection:** non-managed tars (no `.routing-earth.json` member behind `index.bin`,
   read with stdlib tarfile) are rejected on adopt and flagged red with sync disabled.
   dataset_id IS the build timestamp (epoch), shown in the Last-diff cell tooltip.
+
+## Dependencies: the interpreter/pip/PyPI handler (`core/pypi.py`)
+
+Everything Python-interpreter, pip and PyPI lives in **one** module. Nothing else in the plugin
+may spawn a python or call pip — `PYTHON_EXE` (the old, macOS-broken constant in
+`global_definitions.py`) and `resource_utils.exec_cmd` are gone. Two invariants:
+
+1. **Nothing raw escapes.** Every public function returns a value (`None` = merely unknown, e.g.
+   PyPI unreachable) or raises `PyPiError` (`exceptions.py`), whose `str()` fits a message bar
+   and whose `.detail` goes to the log panel. GUI call sites additionally catch bare `Exception`
+   (`dlg_plugin_settings._log_failure`) — a dependency problem must never pop a traceback dialog.
+2. **One interpreter for everything**: `python_exe()` installs *and* runs the `re` CLI, so wheels
+   always match the ABI of the process that loads them. Ask `python_version()` — never
+   `sys.version_info` — about that environment (that's what picks `backports.zstd`).
+
+- **Interpreter resolution** (`_get_python_candidates`, memoized, validated by actually running
+  each candidate): `sys.executable` when it's really a python, then
+  `sys.base_prefix/bin/python{X.Y}`, then sysconfig `BINDIR`, then `$PATH`. **`sys.executable`
+  is platform-dependent inside QGIS Desktop** (confirmed in the QGIS python console): on
+  **linux it IS the system python**, so tier 1 hits and the rest never runs; in the **macOS
+  bundle and on windows it's the QGIS binary**, which is what the fallback chain exists for.
+  Don't use `sys._base_executable` — it only diverges from `sys.executable` inside a venv,
+  where the latter is already a python and wins anyway; in an embedded host getpath just
+  copies `executable` into it. Within the fallbacks, `base_prefix` beats `BINDIR` because
+  conda-forge builds (the macOS QGIS bundle) bake the *build* prefix into `BINDIR`; it beats
+  `$PATH` because `$PATH` may hold an unrelated venv.
+- **What the interpreter must satisfy — deliberately very little.** Only: (a) it can run pip (or
+  bootstrap it from an ensurepip wheel), and (b) it's **>= 3.12**. It does **not** need the qgis
+  bindings, because nothing we install imports `qgis` — the subprocess only ever runs pip and
+  `routing_earth_utils.cli` (pyvalhalla + cryptography). So **don't "validate" a candidate with
+  `import qgis`**: it costs ~520 ms vs ~12 ms for the version probe (times N candidates, on the
+  startup path), and on the macOS bundle / OSGeo4W a bare subprocess lacks the `PYTHONPATH`/
+  `PYTHONHOME` that makes `qgis` importable at all — it would reject the *correct* bundled python
+  on exactly the platforms where the fallback tiers are the only thing running.
+- **Why the 3.12 floor, and why interpreter choice is loose** (wheel tags checked 2026-09-10):
+  pyvalhalla and routing-earth-utils both ship **`cp312-abi3`** wheels (cryptography is
+  `cp311-abi3`, so not the binding constraint). abi3 means a wheel installed under one >= 3.12
+  python loads under any other, which is what makes "some interpreter" good enough — and why we
+  install into `--target` dirs rather than a specific site-packages. **`PY_FLOOR = (3, 12)` is
+  enforced in `_resolve_python`**: a candidate that runs but is older is *skipped, not accepted*,
+  so resolution keeps walking down the tiers instead of dead-ending on it, and if everything is
+  too old the `PyPiError` names the versions it found and says a newer python needn't be the one
+  QGIS runs on. `_get_python_candidates` also searches `$PATH` for explicitly versioned
+  `python3.{20..12}` (newest first), which is the only way out on a host whose QGIS python is
+  below the floor. **That host is real: QGIS 3.x's macOS bundle ships Python 3.9.5**
+  (`config/ltr.conf` in qgis/QGIS-Mac-Packager, Qt 5.15.2) — so on `qgis-v3` + macOS the deps are
+  installable *only* via a separately installed python. Windows/OSGeo4W is fine but has zero
+  headroom: `python3-core` is **3.12.14** (alongside `qgis-ltr` 3.44.14, `qgis` 4.2.2).
+  **The exception is `backports.zstd`** (installed only on py < 3.14, where zstd isn't stdlib):
+  it is **not** abi3, it ships per-version `cp3XX-cp3XX` wheels. So on 3.12/3.13 the install is
+  locked to whichever interpreter ran pip — which is what makes invariant 2 (one interpreter for
+  install *and* run) load-bearing rather than merely tidy. If our wheels ever stop being abi3,
+  this whole looseness goes away and the resolver has to match the host exactly.
+- **pip is not a given.** `pip_argv()` tries `<exe> -m pip`, then runs pip straight out of
+  ensurepip's wheel (`pip-*.whl/pip` — a wheel on sys.path *is* the package: no install, no
+  network, no root, PEP-668-proof), then raises a `PyPiError` naming `python3-pip`/`python3-venv`.
+  The wheel is globbed in **both** places ensurepip itself looks: sysconfig's `WHEEL_PKG_DIR`
+  (Fedora/Debian relocate the wheel there — python3-pip-whl — and strip `ensurepip._bundled`)
+  and then `<stdlib>/ensurepip/_bundled/`. That dir layout has been stable since ensurepip
+  landed in 3.4 (only the pip version in the filename moves, hence the glob), and on
+  macOS/Windows — stock CPython, no distro patching — `WHEEL_PKG_DIR` is empty and `_bundled`
+  is always present. **Flatpak QGIS lives or dies on this fallback**: the KDE runtime has no
+  pip in site-packages but a full `_bundled` (verified: py3.12, `base_prefix=/usr`, empty
+  `WHEEL_PKG_DIR`), and `--target` writes to the profile under `~/.var/app/`, not read-only
+  `/usr`. Deliberately no `pip.pyz` bootstrap download.
+- `run(argv)` is the only subprocess entry point: argv **list** (the old string + `shlex.split(…,
+  posix=False)` kept the quote chars on Windows), `shell=False`, `CREATE_NO_WINDOW` so Windows
+  doesn't flash consoles, everything wrapped into `PyPiError`.
+- Package data (`PyPiPkg`, `PyPiState`, `PYVALHALLA_PKG`, `RE_UTILS_PKG`, `PYPI_PKGS`) lives here
+  too — **not** in `global_definitions.py`, which imports the whole GUI costing-widget tree and
+  would drag it into every consumer.
+- Import direction is one-way: `core/pypi.py` → `utils/resource_utils.py` (for
+  `check_valhalla_installation`, since the pyvalhalla version is read off `valhalla_service
+  --version` in whatever `get_binary_dir()` points at — deliberately, so a custom binary dir
+  reports its own build). Never the reverse.
 
 ## Known PyQt6 gotchas (already hit during the v4 port)
 

@@ -1,6 +1,7 @@
 from functools import partial
 from pathlib import Path
-from typing import Optional
+from traceback import format_exception
+from typing import Optional, Tuple
 
 from packaging.version import parse as Version
 from qgis.core import Qgis
@@ -18,17 +19,23 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
+from ..core.pypi import (
+    PYPI_PKGS,
+    PyPiPkg,
+    PyPiState,
+    compare,
+    install,
+    installed_version,
+    pypi_version,
+)
 from ..core.settings import ValhallaSettings
-from ..exceptions import ValhallaCmdError
-from ..global_definitions import PYPI_PKGS, Dialogs, PyPiPkg, PyPiState
+from ..exceptions import PyPiError
+from ..global_definitions import Dialogs
+from ..utils.logger_utils import qgis_log
 from ..utils.resource_utils import (
-    check_local_lib_version,
     check_valhalla_installation,
     get_default_valhalla_binary_dir,
     get_icon,
-    get_local_lib_version,
-    get_pypi_lib_version,
-    install_pkg,
 )
 from . import UI_RESOURCE_PATH
 from .gui_utils import add_msg_bar
@@ -55,12 +62,11 @@ class PluginSettingsDialog(QDialog, GENERATED_FORM_CLASS):
             # Qt5/PyQt5: enum values live directly on QFileDialog
             _opts = QFileDialog.DontResolveSymlinks | QFileDialog.ReadOnly | QFileDialog.ShowDirsOnly
         self.ui_binary_path.setOptions(_opts)
-        self.setupDepsTable()
-        # add a status bar last, so it's coming first in the layout
+        # the status bar inserts itself at layout index 0, build it before the table
         self.status_bar = add_msg_bar(self.main_layout)
+        self.setupDepsTable()
 
-        # the unified graphs section (local + routing-earth.com), fully built
-        # in code; keep the old object name so the collapsed state persists
+        # the unified graphs section (local + routing-earth.com), fully built in code
         self.ui_graphs_group = QgsCollapsibleGroupBox("Graphs: routing-earth.com && local")
         self.ui_graphs_group.setObjectName("ui_re_group")
         self.graph_widget = GraphManagerWidget(self)
@@ -106,25 +112,33 @@ class PluginSettingsDialog(QDialog, GENERATED_FORM_CLASS):
         self.ui_binary_path.setFilePath(str(default_path))
 
     def setupDepsTable(self):
-        """Set up deps table"""
+        """
+        Set up deps table. Building it may never raise: a package we can't look
+        up online is shown as "unknown", not as a traceback in the user's face.
+        """
         self.ui_deps_table.clear()
         self.ui_deps_table.setRowCount(len(PYPI_PKGS))
         self.ui_deps_table.setHorizontalHeaderLabels(["Package", "Installed", "Available", "Action"])
+        unavailable_pkgs = []
         for row_id, pkg in enumerate(PYPI_PKGS):
-            # get the versions and the currently installed state
-            current_version = Version(get_local_lib_version(pkg) or "0.0.0")
-            pypi_version = get_pypi_lib_version(pkg)
-            installed_state = check_local_lib_version(pypi_version, pkg)
-            if pypi_version.base_version == "0.0.0":
-                self.status_bar.pushMessage(f"Couldn't find PyPI package {pkg.pypi_name} online.")
-                icon = ":images/themes/default/mTaskCancel.svg"
-                tooltip = f"{pkg.pypi_name} does not exist on PyPI"
-            elif installed_state == PyPiState.NOT_INSTALLED:
+            # get the versions and the currently installed state; available is
+            # None when PyPI couldn't be reached, which is not an error
+            local, available, installed_state = self._pkg_row(pkg)
+            current_version = Version(local or "0.0.0")
+            if available is None:
+                unavailable_pkgs.append(pkg.pypi_name)
+            if installed_state == PyPiState.NOT_INSTALLED:
+                # installing is still worth offering when we couldn't reach PyPI
                 icon = ":images/themes/default/pluginNew.svg"
                 tooltip = f"Install {pkg.pypi_name}"
+                if available is None:
+                    tooltip += " (couldn't reach PyPI to check the version)"
+            elif available is None:
+                icon = ":images/themes/default/mIconWarning.svg"
+                tooltip = f"Couldn't reach PyPI, not sure if {pkg.pypi_name} is up to date"
             elif installed_state == PyPiState.UPGRADEABLE:
                 icon = ":images/themes/default/pluginUpgrade.svg"
-                tooltip = f"Upgrade {pkg.pypi_name} to {pypi_version.public}"
+                tooltip = f"Upgrade {pkg.pypi_name} to {available.public}"
             else:
                 icon = ":images/themes/default/algorithms/mAlgorithmCheckGeometry.svg"
                 tooltip = f"{pkg.pypi_name} is at the latest version"
@@ -138,8 +152,9 @@ class PluginSettingsDialog(QDialog, GENERATED_FORM_CLASS):
             version_item = QTableWidgetItem(current_version.public)
             version_item.setToolTip(current_version.public)
             self.ui_deps_table.setItem(row_id, 1, version_item)
-            available_item = QTableWidgetItem(pypi_version.public)
-            available_item.setToolTip(pypi_version.public)
+            available_text = available.public if available else "unknown"
+            available_item = QTableWidgetItem(available_text)
+            available_item.setToolTip(available_text)
             self.ui_deps_table.setItem(row_id, 2, available_item)
 
             # add a tool button for the download
@@ -154,20 +169,47 @@ class PluginSettingsDialog(QDialog, GENERATED_FORM_CLASS):
 
         self.ui_deps_table.resizeColumnToContents(3)
 
+        if unavailable_pkgs:
+            self.status_bar.pushMessage(
+                f"Couldn't reach PyPI to check {', '.join(unavailable_pkgs)}",
+                Qgis.MessageLevel.Warning,
+                5,
+            )
+
+    def _pkg_row(self, pkg: PyPiPkg) -> Tuple[Optional[str], Optional[Version], PyPiState]:
+        """
+        The (installed, available, state) triple for one row — both versions
+        None-able, looked up once, and never raising: the dialog has to open
+        even when we can't tell what's going on.
+        """
+        try:
+            local, available = installed_version(pkg), pypi_version(pkg)
+            return local, available, compare(local, available)
+        except Exception as e:  # noqa: BLE001 - the dialog must open regardless
+            self._log_failure(f"Couldn't determine the {pkg.pypi_name} version", e)
+            return None, None, PyPiState.NOT_INSTALLED
+
     def _on_pypi_install(self, pkg: PyPiPkg, installed_state: PyPiState):
         """Install/upgrade the package (pyvalhalla or routing-earth-utils)."""
         try:
-            install_pkg(pkg, installed_state)
-        except ValhallaCmdError as e:
-            self.status_bar.pushMessage(
-                f"Couldn't install the dependencies:\n{e}", Qgis.MessageLevel.Critical, 0
-            )
+            install(pkg, installed_state)
+        except PyPiError as e:
+            self._log_failure(f"Couldn't install {pkg.pypi_name}: {e}", e, e.detail)
+            return
+        except Exception as e:  # noqa: BLE001 - never let a traceback dialog pop
+            self._log_failure(f"Couldn't install {pkg.pypi_name}", e)
             return
 
         self.status_bar.pushMessage(f"Successfully installed/upgraded package: {pkg.pypi_name}")
         # update the table with the new info
         self.setupDepsTable()
         QApplication.processEvents()
+
+    def _log_failure(self, message: str, exc: Exception, detail: str = ""):
+        """One line in the message bar, everything we know in the log panel."""
+        self.status_bar.pushMessage(f"{message} (see the log panel)", Qgis.MessageLevel.Critical, 0)
+        trace = "".join(format_exception(type(exc), exc, exc.__traceback__))
+        qgis_log(f"{message}\n{detail}\n{trace}", Qgis.MessageLevel.Critical)
 
     def on_settings_change(self, new_text, widget: Optional[QWidget] = ""):
         attr = widget.objectName() if widget else self.sender().objectName()

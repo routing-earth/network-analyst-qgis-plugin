@@ -5,7 +5,8 @@ and the entitlements HTTP call. Registry/entry concerns live in
 core/graph_registry.py (which this module may be imported alongside, never
 the reverse).
 
-The client CLI runs as a subprocess (``PYTHON_EXE -m routing_earth_utils.cli``):
+The client CLI runs as a subprocess (``python_exe() -m routing_earth_utils.cli``,
+the interpreter core/pypi.py resolves and installs with):
 inside QGIS this plugin's own package is named ``valhalla`` and shadows
 pyvalhalla in ``sys.modules``, so ``routing_earth_utils`` (which imports
 ``valhalla.baldr``) can never be imported in-process. The plugin installs
