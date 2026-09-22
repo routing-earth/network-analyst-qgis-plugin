@@ -4,7 +4,7 @@ from qgis.core import Qgis, QgsMapLayerProxyModel
 from qgis.gui import QgisInterface
 from qgis.PyQt import uic
 from qgis.PyQt.QtCore import Qt
-from qgis.PyQt.QtWidgets import QPushButton, QTextEdit, QWidget
+from qgis.PyQt.QtWidgets import QTextEdit, QWidget
 
 from ...global_definitions import SETTINGS_WIDGETS_MAP, RouterProfile
 from ...utils.layer_utils import get_wgs_coords_from_layer
@@ -97,27 +97,15 @@ class RoutingParamsWidget(QWidget, GENERATED_FORM_CLASS):
 
         # time settings
         if self.ui_time_box.isChecked() and not self.ui_date_time_value.isNull():
-            dt: str = self.ui_date_time_value.dateTime().toString(Qt.DateFormat.ISODate)
-            dt_type_btn: QPushButton = self.ui_time_type_btn_group.checkedButton()
-            dt_type = 0
-            valid = True
-            if dt_type_btn.text() == "Current":
-                dt_type = 0
-            elif dt_type_btn.text() == "Depart":
+            dt: str = self.ui_date_time_value.dateTime().toString("yyyy-MM-ddTHH:mm")
+            if self.ui_time_depart.isChecked():
                 dt_type = 1
-            elif dt_type_btn.text() == "Arrive":
+            elif self.ui_time_arrive.isChecked():
                 dt_type = 2
             else:
-                valid = False
-                self.parent_dlg.status_bar.pushMessage(
-                    "Unrecognized option",
-                    f"date/time type {dt_type_btn.text()}",
-                    Qgis.MessageLevel.Critical,
-                    8,
-                )
+                dt_type = 0
 
-            if valid:
-                params["date_time"] = {"value": dt, "type": dt_type}
+            params["date_time"] = {"value": dt, "type": dt_type}
 
         if exclude_locations_lyr:
             params["exclude_locations"] = get_wgs_coords_from_layer(exclude_locations_lyr)
