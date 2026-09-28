@@ -1,6 +1,7 @@
 import os
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from packaging.version import Version
 
@@ -78,6 +79,34 @@ class TestPyPi(unittest.TestCase):
         """We may never claim an upgrade if we couldn't ask what's available."""
         self.assertNotEqual(pypi.check_state(pypi.RE_UTILS_PKG, None), pypi.PyPiState.UPGRADEABLE)
         self.assertNotEqual(pypi.check_state(pypi.PYVALHALLA_PKG, None), pypi.PyPiState.UPGRADEABLE)
+        self.assertNotEqual(pypi.check_state(pypi.SPOPT_PKG, None), pypi.PyPiState.UPGRADEABLE)
+
+    def test_spopt_python_marker(self):
+        """A spopt tree only counts as installed for the python it was installed for."""
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dist_info = root.joinpath("spopt-0.7.0.dist-info")
+            dist_info.mkdir()
+            dist_info.joinpath("METADATA").write_text(
+                "Metadata-Version: 2.1\nName: spopt\nVersion: 0.7.0\n"
+            )
+
+            pypi.spopt_root_dir, real_root = lambda: root, pypi.spopt_root_dir
+            try:
+                marker = root.joinpath(pypi._SPOPT_PY_MARKER)
+                self.assertIsNone(pypi.installed_version(pypi.SPOPT_PKG))  # no marker
+
+                major, minor = pypi.python_version()
+                marker.write_text(f"{major}.{minor}")
+                self.assertEqual(pypi.installed_version(pypi.SPOPT_PKG), "0.7.0")
+
+                marker.write_text(f"{major}.{minor + 1}")  # interpreter changed
+                self.assertIsNone(pypi.installed_version(pypi.SPOPT_PKG))
+
+                marker.write_text("garbage")
+                self.assertIsNone(pypi.installed_version(pypi.SPOPT_PKG))
+            finally:
+                pypi.spopt_root_dir = real_root
 
     def test_check_state_not_installed(self):
         self.assertEqual(pypi.check_state(BOGUS_PKG, Version("1.0.0")), pypi.PyPiState.NOT_INSTALLED)
