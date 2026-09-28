@@ -5,6 +5,7 @@ Note: we install and run all commands with the same python version! Any package
 installation will land in the QGIS settings dir. We only run bundled executables,
 so we don't really care which python version QGIS is running/embedding. We just
 need to find one that's actually > 3.12 for all the abi3 wheels we rely on.
+The exception is spopt's non-abi3 dependency tree, see _install_spopt.
 """
 
 import importlib.metadata
@@ -34,6 +35,7 @@ from qgis.PyQt.QtNetwork import QNetworkReply, QNetworkRequest
 from ..exceptions import PyPiError
 from ..utils.resource_utils import check_valhalla_installation, get_valhalla_exe, valhalla_env
 from .routing_earth import pyvalhalla_root_dir, re_utils_root_dir
+from .settings import get_settings_dir
 
 # json_url = the PyPI JSON endpoint used for the version check
 PyPiPkg = namedtuple("PyPiPkg", ("import_name", "pypi_name", "url", "json_url"))
@@ -49,7 +51,20 @@ RE_UTILS_PKG = PyPiPkg(
     "https://pypi.org/project/routing-earth-utils",
     "https://pypi.org/pypi/routing-earth-utils/json",
 )
-PYPI_PKGS = (PYVALHALLA_PKG, RE_UTILS_PKG)
+SPOPT_PKG = PyPiPkg(
+    "spopt",
+    "spopt",
+    "https://pypi.org/project/spopt",
+    "https://pypi.org/pypi/spopt/json",
+)
+PYPI_PKGS = (PYVALHALLA_PKG, RE_UTILS_PKG, SPOPT_PKG)
+
+# released spopt (<= 0.7) is broken on PuLP 4 (variables must come from model.add_variable)
+# and PuLP 4 bundles no solver anymore; spopt itself doesn't cap it. Drop the pin once
+# https://github.com/pysal/spopt/pull/527 is released.
+_SPOPT_REQS = ("spopt", "pulp<4")
+# the python (major.minor) the spopt tree was installed for, see _install_spopt
+_SPOPT_PY_MARKER = ".python_version"
 
 IS_WIN = os.name == "nt"
 
@@ -223,6 +238,11 @@ def python_version() -> Tuple[int, int]:
     return _resolve_python()[1]
 
 
+def spopt_root_dir() -> Path:
+    """The dir holding the pip-installed spopt + its deps (the spopt subprocess' PYTHONPATH)."""
+    return get_settings_dir().joinpath("spopt")
+
+
 # pip
 
 
@@ -254,7 +274,7 @@ def pip_argv() -> List[str]:
 
     raise PyPiError(
         f"No pip available for {exe}. Install it and try again.",
-        detail=("pip is needed to install pyvalhalla and routing-earth-utils."),
+        detail="pip is needed to install extra packages like pyvalhalla.",
     )
 
 
@@ -265,6 +285,11 @@ def installed_version(pkg: PyPiPkg = PYVALHALLA_PKG) -> Optional[str]:
     """The installed version of ``pkg``, or None if it isn't installed."""
     if pkg.import_name == RE_UTILS_PKG.import_name:
         return _target_dist_version(re_utils_root_dir(), pkg.pypi_name)
+    if pkg.import_name == SPOPT_PKG.import_name:
+        # a tree built for another python is as good as none, see _install_spopt
+        if _spopt_python() != python_version():
+            return None
+        return _target_dist_version(spopt_root_dir(), pkg.pypi_name)
     if pkg.import_name != PYVALHALLA_PKG.import_name:
         return None
 
@@ -298,6 +323,15 @@ def _target_dist_version(root: Path, dist_name: str) -> Optional[str]:
         return None
 
     return None
+
+
+def _spopt_python() -> Optional[Tuple[int, int]]:
+    """The (major, minor) the spopt tree was installed for, None if unknown."""
+    try:
+        major, minor = spopt_root_dir().joinpath(_SPOPT_PY_MARKER).read_text().split(".")[:2]
+        return int(major), int(minor)
+    except (OSError, ValueError):
+        return None
 
 
 def pypi_version(pkg: PyPiPkg) -> Optional[Version]:
@@ -358,6 +392,8 @@ def install(pkg: PyPiPkg, installed_state: PyPiState):
         _install_re_utils(installed_state)
     elif pkg.import_name == PYVALHALLA_PKG.import_name:
         _install_pyvalhalla(installed_state)
+    elif pkg.import_name == SPOPT_PKG.import_name:
+        _install_spopt()
     else:
         raise PyPiError(f"Don't know how to install {pkg.pypi_name}")
 
@@ -425,6 +461,37 @@ def _install_re_utils(installed_state: PyPiState):
     target = ["install", "--target", str(re_dir)]
     run_cmd(pip_argv() + target + ["--no-deps", RE_UTILS_PKG.pypi_name])
     run_cmd(pip_argv() + target + deps)
+
+
+def _install_spopt():
+    """
+    spopt drags in ~40 packages (~500 MB: geopandas, scipy, sklearn, ...) and almost
+    none of them are abi3, so unlike our own wheels the tree only loads under the exact
+    python that installed it. We record that version in a marker and treat a mismatch
+    as not installed, which makes the deps table offer a reinstall after the resolved
+    interpreter changed. A stale tree is always wiped: pip --target doesn't replace
+    existing packages.
+
+    Wheels only: on a flaky index pip's resolver otherwise backtracks to sdists and
+    tries to compile pandas & co.
+    """
+    spopt_dir = spopt_root_dir()
+    _rmtree(spopt_dir)
+    try:
+        spopt_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise PyPiError(f"Couldn't create {spopt_dir}: {e}", detail=str(e))
+
+    run_cmd(
+        pip_argv()
+        + ["install", "--only-binary=:all:", "--timeout", "60", "--target", str(spopt_dir)]
+        + list(_SPOPT_REQS)
+    )
+
+    try:
+        spopt_dir.joinpath(_SPOPT_PY_MARKER).write_text(".".join(map(str, python_version())))
+    except OSError as e:
+        raise PyPiError(f"Couldn't write to {spopt_dir}: {e}", detail=str(e))
 
 
 def _rmtree(path: Path):

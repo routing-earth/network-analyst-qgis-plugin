@@ -79,13 +79,15 @@ scripts/
 2. `ValhallaPlugin.__init__` instantiates `ValhallaProvider`, which constructs every Processing algorithm class (this is where import-time errors surface — see traceback chain in `processing/provider.py:62`).
 3. `ValhallaPlugin.initGui()` registers the Processing provider, builds the toolbar, and creates the `RoutingDockWidget`.
 
-## UI compilation
+## UI files
 
-`.ui` files (Qt Designer XML) live under `valhalla/resources/ui/`. They're compiled into Python with `pyuic6` via `scripts/compile_ui.sh`, output to `valhalla/gui/compiled/*_ui.py`.
+`.ui` files (Qt Designer XML) live under `valhalla/resources/ui/` and are **loaded at runtime**
+(`uic.loadUiType(str(UI_RESOURCE_PATH / "x.ui"))` at module top, since #67). There is no
+`gui/compiled/` anymore; `scripts/compile_ui.sh` is a dead leftover.
 
-- **Never hand-edit** `valhalla/gui/compiled/*_ui.py` — they're regenerated.
-- After editing any `.ui`, re-run `bash scripts/compile_ui.sh`.
-- Older `.ui` files may use unscoped Qt6 enum syntax (e.g. `QFileDialog::DontResolveSymlinks`); pyuic6 won't fix this for you. Update the `.ui` to use scoped form (`QFileDialog::Option::DontResolveSymlinks`) and recompile.
+- Editing a `.ui` takes effect on the next plugin load, nothing to regenerate.
+- Older `.ui` files may use unscoped Qt6 enum syntax (e.g. `QFileDialog::DontResolveSymlinks`); the
+  PyQt6 loader won't fix this for you. Use the scoped form (`QFileDialog::Option::DontResolveSymlinks`).
 
 ## Test setup
 
@@ -257,13 +259,44 @@ may spawn a python or call pip — `PYTHON_EXE` (the old, macOS-broken constant 
 - `run(argv)` is the only subprocess entry point: argv **list** (the old string + `shlex.split(…,
   posix=False)` kept the quote chars on Windows), `shell=False`, `CREATE_NO_WINDOW` so Windows
   doesn't flash consoles, everything wrapped into `PyPiError`.
-- Package data (`PyPiPkg`, `PyPiState`, `PYVALHALLA_PKG`, `RE_UTILS_PKG`, `PYPI_PKGS`) lives here
+- **spopt is the non-abi3 exception** (`SPOPT_PKG`, `_install_spopt`, dir `spopt_root_dir()` =
+  `<profile>/valhalla/spopt`). `pip install --only-binary=:all: --target … spopt "pulp<4"`: ~40
+  packages / ~500 MB (geopandas, scipy, sklearn, …), nearly all per-version `cp3XX` wheels, so the
+  tree only loads under the python that installed it. The install writes that `major.minor` into
+  `.python_version`; `installed_version` reports **None on a mismatch** (→ deps table offers a
+  reinstall), and every install wipes the dir first (pip `--target` doesn't replace). Wheels-only
+  because on a flaky index pip backtracked to a pandas sdist and tried to compile it.
+  **`pulp<4` is load-bearing**: PuLP 4 (Rust rewrite) bundles no solver and breaks released
+  spopt ≤ 0.7 (variables must come from `model.add_variable`); spopt doesn't cap it. Drop the pin
+  when pysal/spopt#527 ships. PuLP 3.3.x bundles CBC for linux x64/arm64, win x64, **macOS x86_64
+  only** (Apple Silicon → Rosetta).
+- Package data (`PyPiPkg`, `PyPiState`, `PYVALHALLA_PKG`, `RE_UTILS_PKG`, `SPOPT_PKG`, `PYPI_PKGS`) lives here
   too — **not** in `global_definitions.py`, which imports the whole GUI costing-widget tree and
   would drag it into every consumer.
 - Import direction is one-way: `core/pypi.py` → `utils/resource_utils.py` (for
   `check_valhalla_installation`, since the pyvalhalla version is read off `valhalla_service
   --version` in whatever `get_binary_dir()` points at — deliberately, so a custom binary dir
   reports its own build). Never the reverse.
+
+## Spatial optimization (spopt) — port in progress
+
+Facility location on Valhalla cost matrices via [pysal/spopt](https://github.com/pysal/spopt),
+re-done from the old gis-ops Network Analyst plugin (not a verbatim port). Staged PRs:
+① deps install (**done**, see Dependencies) → ② out-of-process runner + client → ③ LSCP
+Processing algo → ④ MCLP → ⑤ **dock integration** (below the existing endpoints, visually
+separated; NOT a separate dialog — `dlg_spopt.py`/`.ui` are 2021 leftovers to be replaced).
+p-center/p-median are deferred: solves take minutes (200×40: CBC 344 s / 568 s) and need real
+cancel UX.
+
+Decisions behind the design:
+- **Subprocess, never in-process**, although spopt *could* be imported (no `valhalla` shadowing):
+  its tree bundles its own PROJ/GEOS/GDAL (pyproj/shapely/pyogrio `.libs`) next to QGIS' own,
+  clashes with the host numpy already in `sys.modules`, and a solve can't be killed in-process.
+  The runner gets the cost matrix as JSON, returns selections; QGIS keeps matrix + geometry joins.
+- spopt reads solutions with `var.value() > 0`; with non-CBC solvers (HiGHS) near-zero noise
+  made MCLP report 10 of p=5 facilities. The runner thresholds (`> 0.5`) itself.
+- The dormant `processing/spatial_optimization/` + `tests/.../UNUSED_*spopt*` are the 2021 code
+  kept as reference until step ③ replaces them.
 
 ## Running the valhalla binaries (all three platforms since pyvalhalla 3.9.0)
 

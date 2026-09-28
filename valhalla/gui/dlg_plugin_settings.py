@@ -190,7 +190,7 @@ class PluginSettingsDialog(QDialog, GENERATED_FORM_CLASS):
             return None, None, PyPiState.NOT_INSTALLED
 
     def _on_pypi_install(self, pkg: PyPiPkg, installed_state: PyPiState):
-        """Install/upgrade the package (pyvalhalla or routing-earth-utils)."""
+        """Install/upgrade one of the PYPI_PKGS."""
         try:
             install(pkg, installed_state)
         except PyPiError as e:
