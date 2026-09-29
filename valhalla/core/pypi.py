@@ -22,7 +22,7 @@ from functools import lru_cache
 from pathlib import Path
 from shutil import rmtree, which
 from tempfile import TemporaryDirectory
-from typing import List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 # packaging is a hard dependency of QGIS, always available
 from packaging.utils import canonicalize_name
@@ -96,6 +96,8 @@ _ENSUREPIP_CMD = (
     "print(*sorted(str(w) for p in dirs for w in p.glob('pip-*.whl')), sep='\\n')"
 )
 _CMD_TIMEOUT = 20
+# seconds between cancel checks in run_python
+_POLL_INTERVAL = 0.2
 _LOG_HINT = "see the log panel for the full output"
 
 
@@ -133,6 +135,59 @@ def run_cmd(
         raise PyPiError(f"{program} timed out after {timeout} s", detail=" ".join(argv))
     except OSError as e:
         raise PyPiError(f"Couldn't run {program}: {e}", detail=f"{' '.join(argv)}\n\n{e}")
+
+
+def run_python(
+    args: Sequence,
+    stdin: str = "",
+    env: Optional[dict] = None,
+    is_canceled: Callable[[], bool] = lambda: False,
+) -> Optional[subprocess.CompletedProcess]:
+    """
+    Blocks the thread, should only be called by worker threads in processing algos.
+
+    Runs python_exe() with args until it exits or ``is_canceled()`` says so, which
+    is polled, so it's safe to hand a QgsFeedback's isCanceled.
+
+    Always runs with ``-P -s``: no script dir/cwd on sys.path (a script inside the plugin
+    would see e.g. core/http/ shadow the stdlib) and no user site-packages.
+
+    :param args: everything after the interpreter, e.g. [script, arg]
+    :param stdin: text piped to the child
+    :param env: the child's environment, None for ours
+    :param is_canceled: polled while the child runs, kills it when True
+    :returns: the completed process whatever its exit code, None if canceled
+    :raises PyPiError: when there's no interpreter or it fails to start
+    """
+    argv = [str(python_exe()), "-P", "-s"] + [str(a) for a in args]
+    try:
+        proc = subprocess.Popen(  # nosec B603
+            argv,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            **({} if not IS_WIN else {"creationflags": subprocess.CREATE_NO_WINDOW}),
+        )
+    except OSError as e:
+        raise PyPiError(f"Couldn't run {Path(argv[0]).name}: {e}", detail=f"{' '.join(argv)}\n\n{e}")
+
+    # input may only be passed to the first communicate()
+    pending_input = stdin
+    while True:
+        # check every 0.2 secs if the algo was canceled
+        # if not, check in with the process again
+        try:
+            stdout, stderr = proc.communicate(pending_input, timeout=_POLL_INTERVAL)
+            return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+        except subprocess.TimeoutExpired:
+            # clear the input before polling again
+            pending_input = None
+            if is_canceled():
+                proc.kill()
+                proc.communicate()
+                return None
 
 
 def _run_cmd(argv: Sequence, env: Optional[dict] = None) -> Optional[str]:
@@ -472,8 +527,7 @@ def _install_spopt():
     interpreter changed. A stale tree is always wiped: pip --target doesn't replace
     existing packages.
 
-    Wheels only: on a flaky index pip's resolver otherwise backtracks to sdists and
-    tries to compile pandas & co.
+    Wheels only so pip's resolver doesn't attempt source installations for pandas & co
     """
     spopt_dir = spopt_root_dir()
     _rmtree(spopt_dir)
