@@ -256,9 +256,13 @@ may spawn a python or call pip — `PYTHON_EXE` (the old, macOS-broken constant 
   pip in site-packages but a full `_bundled` (verified: py3.12, `base_prefix=/usr`, empty
   `WHEEL_PKG_DIR`), and `--target` writes to the profile under `~/.var/app/`, not read-only
   `/usr`. Deliberately no `pip.pyz` bootstrap download.
-- `run(argv)` is the only subprocess entry point: argv **list** (the old string + `shlex.split(…,
+- `run_cmd(argv)` is the subprocess entry point: argv **list** (the old string + `shlex.split(…,
   posix=False)` kept the quote chars on Windows), `shell=False`, `CREATE_NO_WINDOW` so Windows
-  doesn't flash consoles, everything wrapped into `PyPiError`.
+  doesn't flash consoles, everything wrapped into `PyPiError`. Its sibling **`run_python(args,
+  stdin, env, is_canceled)`** runs `python_exe() -P -s …` with a polled cancel (kill → returns
+  None) and returns the process whatever its exit code — for our own scripts that answer on
+  stdout (spopt runner). `-P` is load-bearing: a script inside the plugin would otherwise get its
+  own dir on `sys.path[0]`, e.g. `core/http/` shadowing the stdlib `http`.
 - **spopt is the non-abi3 exception** (`SPOPT_PKG`, `_install_spopt`, dir `spopt_root_dir()` =
   `<profile>/valhalla/spopt`). `pip install --only-binary=:all: --target … spopt "pulp<4"`: ~40
   packages / ~500 MB (geopandas, scipy, sklearn, …), nearly all per-version `cp3XX` wheels, so the
@@ -282,7 +286,7 @@ may spawn a python or call pip — `PYTHON_EXE` (the old, macOS-broken constant 
 
 Facility location on Valhalla cost matrices via [pysal/spopt](https://github.com/pysal/spopt),
 re-done from the old gis-ops Network Analyst plugin (not a verbatim port). Staged PRs:
-① deps install (**done**, see Dependencies) → ② out-of-process runner + client → ③ LSCP
+① deps install (**done**, see Dependencies) → ② out-of-process runner + client (**done**) → ③ LSCP
 Processing algo → ④ MCLP → ⑤ **dock integration** (below the existing endpoints, visually
 separated; NOT a separate dialog — `dlg_spopt.py`/`.ui` are 2021 leftovers to be replaced).
 p-center/p-median are deferred: solves take minutes (200×40: CBC 344 s / 568 s) and need real
@@ -292,9 +296,23 @@ Decisions behind the design:
 - **Subprocess, never in-process**, although spopt *could* be imported (no `valhalla` shadowing):
   its tree bundles its own PROJ/GEOS/GDAL (pyproj/shapely/pyogrio `.libs`) next to QGIS' own,
   clashes with the host numpy already in `sys.modules`, and a solve can't be killed in-process.
-  The runner gets the cost matrix as JSON, returns selections; QGIS keeps matrix + geometry joins.
+  QGIS keeps matrix + geometry joins; only numbers cross the boundary.
+- `core/spopt/__init__.py` = the client (`solve(SpoptProblem, cost_matrix, …, is_canceled)` →
+  `fac2cli` or None if canceled, raises `SpoptError` with the runner's stderr as `.detail`).
+  `core/spopt/runner.py` = standalone script (**no plugin imports**) that also **owns the
+  protocol**: `SpoptProblem`, `SolveRequest`/`SolveResponse` dataclasses, JSON via `asdict` /
+  `Cls(**json)` so an unknown or missing key is a loud `TypeError`, never silently ignored. The
+  client imports these types in-process, so the runner may import **only stdlib at module
+  level** (numpy/pulp/spopt go inside `solve()`). stdout is the result channel (redirected to
+  stderr during the solve), exit 0/1. Child env: `PYTHONPATH` = **only** the spopt tree, never
+  the host's. Matrix is clients (rows) × facilities (cols).
+- `fac2cli[j]` = all clients within the radius of selected facility j (MCLP: only covered ones);
+  a client can appear under several facilities — that's spopt's coverage semantics.
 - spopt reads solutions with `var.value() > 0`; with non-CBC solvers (HiGHS) near-zero noise
-  made MCLP report 10 of p=5 facilities. The runner thresholds (`> 0.5`) itself.
+  made MCLP report 10 of p=5 facilities. The runner calls `model.problem.solve()` directly
+  (bypassing spopt's `solve()`/result arrays) and thresholds (`> 0.5`) itself.
+- Tests: `tests/test_localhost_plugin/test_utils/test_spopt.py` (real subprocess, installs spopt
+  into the profile on first run, ~660 MB).
 - The dormant `processing/spatial_optimization/` + `tests/.../UNUSED_*spopt*` are the 2021 code
   kept as reference until step ③ replaces them.
 
