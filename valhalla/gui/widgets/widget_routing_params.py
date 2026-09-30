@@ -1,17 +1,21 @@
 import json
+from typing import Optional
 
-from qgis.core import Qgis, QgsMapLayerProxyModel
+from qgis.core import Qgis, QgsFieldProxyModel, QgsMapLayer, QgsMapLayerProxyModel
 from qgis.gui import QgisInterface
 from qgis.PyQt import uic
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import QPushButton, QTextEdit, QWidget
 
 from ...global_definitions import SETTINGS_WIDGETS_MAP, RouterProfile
-from ...utils.layer_utils import get_wgs_coords_from_layer
+from ...utils.layer_utils import get_linear_cost_factors, get_wgs_coords_from_layer
 from ...utils.misc_utils import deep_merge
 from .. import UI_RESOURCE_PATH
 
 GENERATED_FORM_CLASS, _ = uic.loadUiType(str(UI_RESOURCE_PATH / "routing_params_widget.ui"))
+
+# the field preselected for the linear factors, if the chosen layer has it
+LINEAR_FACTOR_FIELD = "factor"
 
 
 class RoutingParamsWidget(QWidget, GENERATED_FORM_CLASS):
@@ -40,8 +44,16 @@ class RoutingParamsWidget(QWidget, GENERATED_FORM_CLASS):
         self.exclude_locations.setFilters(QgsMapLayerProxyModel.Filter.PointLayer)
         self.exclude_polygons.setFilters(QgsMapLayerProxyModel.Filter.PolygonLayer)
 
+        # same for the linear factors
+        self.linear_factors.setAllowEmptyLayer(True)
+        self.linear_factors.setCurrentIndex(0)
+        self.linear_factors.setFilters(QgsMapLayerProxyModel.Filter.LineLayer)
+        self.linear_factors_field.setAllowEmptyFieldName(True)
+        self.linear_factors_field.setFilters(QgsFieldProxyModel.Filter.Numeric)
+
         # connections
         self.ui_reset_settings.clicked.connect(self._on_settings_reset)
+        self.linear_factors.layerChanged.connect(self._on_linear_factors_layer_changed)
 
         # add profile setting widgets
         for router_profile in RouterProfile:
@@ -53,6 +65,11 @@ class RoutingParamsWidget(QWidget, GENERATED_FORM_CLASS):
             self.ui_settings_stacked.addWidget(
                 getattr(self, SETTINGS_WIDGETS_MAP[router_profile]["ui_name"])
             )
+
+    def _on_linear_factors_layer_changed(self, layer: Optional[QgsMapLayer]):
+        self.linear_factors_field.setLayer(layer)
+        idx = layer.fields().lookupField(LINEAR_FACTOR_FIELD) if layer else -1
+        self.linear_factors_field.setField(layer.fields().at(idx).name() if idx >= 0 else "")
 
     def _on_settings_reset(self):
 
@@ -84,6 +101,7 @@ class RoutingParamsWidget(QWidget, GENERATED_FORM_CLASS):
         # finally, also reset global costing options
         self.exclude_locations.setCurrentIndex(0)
         self.exclude_polygons.setCurrentIndex(0)
+        self.linear_factors.setCurrentIndex(0)
         self.ui_metric_fastest.setChecked(True)
 
     def set_current_costing_widget(self, profile: RouterProfile):
@@ -126,6 +144,17 @@ class RoutingParamsWidget(QWidget, GENERATED_FORM_CLASS):
 
         if exclude_polygons_lyr:
             params["exclude_polygons"] = get_wgs_coords_from_layer(exclude_polygons_lyr)
+
+        if linear_factors_lyr := self.linear_factors.currentLayer():
+            if factor_field := self.linear_factors_field.currentField():
+                params["linear_cost_factors"] = get_linear_cost_factors(linear_factors_lyr, factor_field)
+            else:
+                self.parent_dlg.status_bar.pushMessage(
+                    "Linear factors ignored",
+                    f"select the factor field of layer {linear_factors_lyr.name()}",
+                    Qgis.MessageLevel.Critical,
+                    8,
+                )
 
         params["options"] = self.ui_settings_stacked.currentWidget().get_params()
         if self.ui_metric_shortest.isChecked():

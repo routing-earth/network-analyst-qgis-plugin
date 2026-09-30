@@ -7,6 +7,7 @@ from qgis.core import (
     QgsFields,
     QgsProcessing,
     QgsProcessingAlgorithm,
+    QgsProcessingException,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterDefinition,
     QgsProcessingParameterEnum,
@@ -33,7 +34,7 @@ from ...gui.widgets.costing_settings.widget_settings_valhalla_base import (
     ValhallaSettingsBase,
 )
 from ...utils.geom_utils import WGS84
-from ...utils.layer_utils import get_wgs_coords_from_layer
+from ...utils.layer_utils import get_linear_cost_factors, get_wgs_coords_from_layer
 from ...utils.misc_utils import wrap_in_html_tag
 from ...utils.resource_utils import get_icon
 from ..processing_definitions import HELP_DIR
@@ -47,6 +48,8 @@ class ValhallaBaseAlgorithm(QgsProcessingAlgorithm):
     IN_MODE = "INPUT_MODE"
     IN_AVOID_LOCATIONS = "INPUT_AVOID_LOCATIONS"
     IN_AVOID_POLYGONS = "INPUT_AVOID_POLYGONS"
+    IN_LINEAR_FACTORS = "INPUT_LINEAR_FACTORS"
+    IN_LINEAR_FACTORS_FIELD = "INPUT_LINEAR_FACTORS_FIELD"
     IN_1 = "INPUT_LAYER_1"
     IN_FIELD_1 = "INPUT_FIELD_1"
 
@@ -153,6 +156,33 @@ class ValhallaBaseAlgorithm(QgsProcessingAlgorithm):
                 avoid_polygons_param.flags() | QgsProcessingParameterDefinition.Flag.FlagAdvanced
             )
             self.addParameter(avoid_polygons_param)
+
+            linear_factors_param = QgsProcessingParameterFeatureSource(
+                name=self.IN_LINEAR_FACTORS,
+                description="Line layer with map matched lines to factor the costs along",
+                types=[QgsProcessing.SourceType.TypeVectorLine],
+                optional=True,
+            )
+            linear_factors_param.setHelp(
+                "Sent as 'linear_cost_factors'. The lines must already be map matched to the routing graph, "
+                "i.e. follow its edges without a break, e.g. a route between two waypoints."
+            )
+            linear_factors_param.setFlags(
+                linear_factors_param.flags() | QgsProcessingParameterDefinition.Flag.FlagAdvanced
+            )
+            self.addParameter(linear_factors_param)
+
+            linear_factors_field_param = QgsProcessingParameterField(
+                name=self.IN_LINEAR_FACTORS_FIELD,
+                description="Factor field of the map matched lines",
+                parentLayerParameterName=self.IN_LINEAR_FACTORS,
+                type=QgsProcessingParameterField.DataType.Numeric,
+                optional=True,
+            )
+            linear_factors_field_param.setFlags(
+                linear_factors_field_param.flags() | QgsProcessingParameterDefinition.Flag.FlagAdvanced
+            )
+            self.addParameter(linear_factors_field_param)
             self.setup_costing_options()
 
         input_layer_desc = f"Input point layer{' 1' if multi_layer else ''}"
@@ -204,6 +234,15 @@ class ValhallaBaseAlgorithm(QgsProcessingAlgorithm):
             avoid_polygons = self.parameterAsSource(parameters, self.IN_AVOID_POLYGONS, context)
             if avoid_polygons:
                 params["avoid_polygons"] = get_wgs_coords_from_layer(avoid_polygons)
+
+            linear_factors = self.parameterAsSource(parameters, self.IN_LINEAR_FACTORS, context)
+            if linear_factors:
+                factor_field = self.parameterAsString(parameters, self.IN_LINEAR_FACTORS_FIELD, context)
+                if not factor_field:
+                    raise QgsProcessingException(
+                        "The layer with map matched lines needs a factor field to be selected."
+                    )
+                params["linear_cost_factors"] = get_linear_cost_factors(linear_factors, factor_field)
 
             params["options"] = self.get_costing_options(parameters, context)
             params["options"]["shortest"] = True if mode == RoutingMetric.SHORTEST else False
