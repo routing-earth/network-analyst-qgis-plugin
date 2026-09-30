@@ -30,11 +30,11 @@ def solve(
     weights: Optional[Sequence[float]] = None,
     predefined: Optional[Sequence[int]] = None,
     is_canceled: Callable[[], bool] = lambda: False,
-) -> Optional[List[List[int]]]:
+) -> Optional[List[Optional[List[int]]]]:
     """
     Solves ``problem`` and returns, per facility (matrix column), the indices of the
-    clients (matrix rows) it covers; empty for a facility that wasn't selected.
-    Coverage problems may assign a client to several facilities.
+    clients (matrix rows) it covers, or None for a facility that wasn't selected. A selected
+    facility may cover nobody, and coverage problems may assign a client to several facilities.
 
     :param cost_matrix: clients x facilities
     :param p_facilities: MCLP only

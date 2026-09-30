@@ -53,6 +53,7 @@ from .routing.valhalla.mapmatch import (
     ValhallaMapMatchTruck,
 )
 from .spatial_optimization.lscp import LSCPAlgorithm
+from .spatial_optimization.mclp import MCLPAlgorithm
 
 
 class ValhallaProvider(QgsProcessingProvider):
@@ -101,6 +102,7 @@ class ValhallaProvider(QgsProcessingProvider):
                     ValhallaMapMatchBicycle,
                     ValhallaMapMatchBus,
                     LSCPAlgorithm,
+                    MCLPAlgorithm,
                 )
             ],
         ]

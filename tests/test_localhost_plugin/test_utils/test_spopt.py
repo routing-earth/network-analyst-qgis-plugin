@@ -32,7 +32,7 @@ class TestSpopt(unittest.TestCase):
 
     def test_lscp(self):
         fac2cli = spopt.solve(SpoptProblem.LSCP, MATRIX, RADIUS)
-        self.assertEqual(fac2cli, [[0, 1], [2, 3], []])
+        self.assertEqual(fac2cli, [[0, 1], [2, 3], None])
 
     def test_lscp_predefined(self):
         fac2cli = spopt.solve(SpoptProblem.LSCP, MATRIX, RADIUS, predefined=[0, 0, 1])
@@ -41,7 +41,16 @@ class TestSpopt(unittest.TestCase):
     def test_mclp(self):
         # one facility: fac 1 covers the heavy client 3
         fac2cli = spopt.solve(SpoptProblem.MCLP, MATRIX, RADIUS, p_facilities=1, weights=[1, 1, 1, 10])
-        self.assertEqual(fac2cli, [[], [2, 3], []])
+        self.assertEqual(fac2cli, [None, [2, 3], None])
+
+    def test_selected_without_clients(self):
+        """A selected facility which covers nobody is still selected, not dropped."""
+        matrix = [[5, 50], [5, 50]]  # fac 0 covers both clients, fac 1 nobody
+        self.assertEqual(spopt.solve(SpoptProblem.LSCP, matrix, RADIUS, predefined=[0, 1]), [[0, 1], []])
+        self.assertEqual(
+            spopt.solve(SpoptProblem.MCLP, matrix, RADIUS, p_facilities=2, weights=[1, 1]), [[0, 1], []]
+        )
+        self.assertEqual(spopt.solve(SpoptProblem.LSCP, matrix, RADIUS), [[0, 1], None])
 
     def test_infeasible(self):
         # client 3 can't be reached from anywhere
