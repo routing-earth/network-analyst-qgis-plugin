@@ -287,8 +287,9 @@ may spawn a python or call pip — `PYTHON_EXE` (the old, macOS-broken constant 
 Facility location on Valhalla cost matrices via [pysal/spopt](https://github.com/pysal/spopt),
 re-done from the old gis-ops Network Analyst plugin (not a verbatim port). Staged PRs:
 ① deps install (**done**, see Dependencies) → ② out-of-process runner + client (**done**) → ③ LSCP
-Processing algo → ④ MCLP → ⑤ **dock integration** (below the existing endpoints, visually
-separated; NOT a separate dialog — `dlg_spopt.py`/`.ui` are 2021 leftovers to be replaced).
+Processing algo (**done**) → ④ MCLP → ⑤ **dock integration** (below the existing endpoints,
+visually separated; NOT a separate dialog — `resources/ui/dlg_spopt.ui` is only kept as the 2021
+layout reference, its `dlg_spopt.py` is gone).
 p-center/p-median are deferred: solves take minutes (200×40: CBC 344 s / 568 s) and need real
 cancel UX.
 
@@ -311,10 +312,27 @@ Decisions behind the design:
 - spopt reads solutions with `var.value() > 0`; with non-CBC solvers (HiGHS) near-zero noise
   made MCLP report 10 of p=5 facilities. The runner calls `model.problem.solve()` directly
   (bypassing spopt's `solve()`/result arrays) and thresholds (`> 0.5`) itself.
-- Tests: `tests/test_localhost_plugin/test_utils/test_spopt.py` (real subprocess, installs spopt
-  into the profile on first run, ~660 MB).
-- The dormant `processing/spatial_optimization/` + `tests/.../UNUSED_*spopt*` are the 2021 code
-  kept as reference until step ③ replaces them.
+- **Processing** (`processing/spatial_optimization/`, group "Spatial Optimization", ids
+  `valhalla:<problem>`): `SpoptBaseAlgorithm` takes a **matrix layer** (a matrix algo's output:
+  facilities = `source`, demand = `target`) — deliberately not computing the matrix itself, so it
+  composes in models; the dock chains matrix → spopt. It reads the matrix in **one pass** (the
+  2021 code did one `QgsExpression` query per target), NULL/missing cost = `inf` (never covered),
+  IDs in order of appearance. The facility & demand layers are **required** (a matrix-only
+  mode existed briefly; it only bought `NoGeometry` branches) and join geometries back, matched
+  by the ID field or **feature id** — the same fallback `matrix_base` uses. The matrix doesn't
+  record which one it was built with, so **the caller must pass the same ID choice as for the
+  matrix**: a matrix ID missing from the layer is an error, but if both key spaces overlap
+  (field values 1..N vs feature ids 1..N in another order) a wrong choice **mis-joins silently**
+  (reproduced). The dock must always hand the same field to both steps. Lines transform the facility
+  end into the demand CRS. Subclasses set `PROBLEM` + `init_problem_params`/`get_problem_kwargs`;
+  `coverage_mixin.py:CoverageMixin` = service radius + predefined field (LSCP, MCLP).
+- Tests: `tests/test_localhost_plugin/test_utils/test_spopt.py` (real subprocess) and
+  `…/test_processing/test_lscp.py` (static `tests/data/matrix.geojson`, **no valhalla needed**);
+  both install spopt into the profile on first run (~660 MB).
+- **Test-harness gotcha**: reading *any* OGR layer under `get_qgis_app()` crashes the process
+  at exit (`std::bad_alloc` after the atexit `exitQgis()`; QGIS 4.2.1 / GDAL 3.13.3 — a bare
+  `QgsApplication` exits fine). Tests load the GeoJSON fixtures into **memory layers** with stdlib
+  json (`test_lscp.load_geojson`) instead.
 
 ## Running the valhalla binaries (all three platforms since pyvalhalla 3.9.0)
 
@@ -354,7 +372,7 @@ These will keep biting — check first when something breaks after touching v4 c
 ## Coding conventions
 
 - Black, line length 105. isort with black profile. `pyproject.toml` excludes `compiled/`, `third_party/`, and a few entry-point files.
-- Tests under `tests/test_localhost_docker/test_processing/test_spatial_optimization/UNUSED_*.py` are deliberately skipped (filename prefix).
+- Tests named `UNUSED_*.py` (e.g. the OSRM ones under `test_processing/test_routing/`) are deliberately skipped (filename prefix).
 - Don't modify `valhalla/third_party/routingpy/` — it's vendored. The plugin overrides what it needs via subclassing in `valhalla/core/`.
 
 ---
