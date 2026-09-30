@@ -323,9 +323,14 @@ Decisions behind the design:
   record which one it was built with, so **the caller must pass the same ID choice as for the
   matrix**: a matrix ID missing from the layer is an error, but if both key spaces overlap
   (field values 1..N vs feature ids 1..N in another order) a wrong choice **mis-joins silently**
-  (reproduced). The dock must always hand the same field to both steps. Lines transform the facility
+  (reproduced). The dock must always hand the same field to both steps. Ambiguity is an error,
+  never last-one-wins: a repeated (source, target) pair in the matrix, or a matrix ID matching
+  several layer features (non-unique ID field). Lines transform the facility
   end into the demand CRS. Subclasses set `PROBLEM` + `init_problem_params`/`get_problem_kwargs`;
   `coverage_mixin.py:CoverageMixin` = service radius + predefined field (LSCP, MCLP).
+- `DEFAULT_LAYER_FIELDS` (`global_definitions.py`) holds **shared `QgsField` objects**, also used
+  by the dock: copy before `setType()`/renaming. `matrix_base` used to set the ID types on them
+  in place, so one string-ID run turned every later matrix' `source`/`target` into strings.
 - Tests: `tests/test_localhost_plugin/test_utils/test_spopt.py` (real subprocess) and
   `…/test_processing/test_lscp.py` (static `tests/data/matrix.geojson`, **no valhalla needed**);
   both install spopt into the profile on first run (~660 MB).

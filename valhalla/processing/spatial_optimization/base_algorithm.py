@@ -249,14 +249,19 @@ class SpoptBaseAlgorithm(QgsProcessingAlgorithm):
         dem_layer_ids: Dict[Any, None] = dict()
         for feat in matrix.getFeatures():
             fac_id, dem_id = feat[FieldNames.SOURCE], feat[FieldNames.TARGET]
+            if (fac_id, dem_id) in costs:
+                # e.g. the ID field used for the matrix wasn't unique
+                raise QgsProcessingException(
+                    f"The cost matrix has more than one row for source {fac_id} and target {dem_id}"
+                )
             fac_layer_ids[fac_id] = None
             dem_layer_ids[dem_id] = None
             try:
                 costs[(fac_id, dem_id)] = float(feat[metric])
             except (TypeError, ValueError):
-                pass  # NULL
+                costs[(fac_id, dem_id)] = math.inf  # NULL
 
-        if not costs:
+        if not any(math.isfinite(cost) for cost in costs.values()):
             raise QgsProcessingException("The cost matrix has no valid results")
 
         # transpose the cost matrix for spopt
@@ -268,8 +273,20 @@ class SpoptBaseAlgorithm(QgsProcessingAlgorithm):
     def _index_features(
         source: QgsFeatureSource, id_field: str, ids: List[Any], what: str
     ) -> Dict[Any, QgsFeature]:
-        """The layer's features by ID (or feature ID); every matrix ID must be found."""
-        feats = {(feat[id_field] if id_field else feat.id()): feat for feat in source.getFeatures()}
+        """The layer's features by ID (or feature ID); every matrix ID must be found exactly once."""
+        feats: Dict[Any, QgsFeature] = dict()
+        duplicates = set()
+        for feat in source.getFeatures():
+            feat_id = feat[id_field] if id_field else feat.id()
+            if feat_id in feats:
+                duplicates.add(feat_id)
+            feats[feat_id] = feat
+
+        if ambiguous := [str(i) for i in ids if i in duplicates]:
+            raise QgsProcessingException(
+                f"The {what} layer has several features for the matrix IDs {', '.join(ambiguous[:10])}"
+                f"{' ...' if len(ambiguous) > 10 else ''}. The ID field must be unique."
+            )
         if missing := [str(i) for i in ids if i not in feats]:
             raise QgsProcessingException(
                 f"The {what} layer has no features for the matrix IDs {', '.join(missing[:10])}"
