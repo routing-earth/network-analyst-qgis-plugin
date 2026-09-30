@@ -132,8 +132,9 @@ class SpoptBaseAlgorithm(QgsProcessingAlgorithm):
         fac_ids: List[Any],
         dem_ids: List[Any],
         fac_feats: Dict[Any, QgsFeature],
+        dem_feats: Dict[Any, QgsFeature],
     ) -> Dict[str, Any]:
-        """The problem-specific kwargs for core.spopt.solve(), in matrix order."""
+        """The problem-specific kwargs for core.spopt.solve(), per-feature values in matrix order."""
         raise NotImplementedError
 
     def processAlgorithm(  # noqa: C901
@@ -163,7 +164,9 @@ class SpoptBaseAlgorithm(QgsProcessingAlgorithm):
                 self.PROBLEM,
                 cost_matrix,
                 is_canceled=feedback.isCanceled,
-                **self.get_problem_kwargs(parameters, context, fac_layer_ids, dem_layer_ids, fac_feats),
+                **self.get_problem_kwargs(
+                    parameters, context, fac_layer_ids, dem_layer_ids, fac_feats, dem_feats
+                ),
             )
         except SpoptError as e:
             feedback.pushDebugInfo(e.detail)
@@ -201,7 +204,7 @@ class SpoptBaseAlgorithm(QgsProcessingAlgorithm):
             fac_points = {i: transform.transform(f.geometry().asPoint()) for i, f in fac_feats.items()}
 
         for fac_idx, demand_pts in enumerate(fac2cli):
-            if not demand_pts:
+            if demand_pts is None:  # not selected
                 continue
             # add facility feature
             fac_id = fac_layer_ids[fac_idx]

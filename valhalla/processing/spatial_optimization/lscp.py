@@ -12,5 +12,5 @@ class LSCPAlgorithm(CoverageMixin, SpoptBaseAlgorithm):
     def init_problem_params(self):
         self.init_coverage_params()
 
-    def get_problem_kwargs(self, parameters, context, fac_ids, dem_ids, fac_feats):
+    def get_problem_kwargs(self, parameters, context, fac_ids, dem_ids, fac_feats, dem_feats):
         return self.get_coverage_kwargs(parameters, context, fac_ids, fac_feats)

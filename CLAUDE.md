@@ -287,7 +287,7 @@ may spawn a python or call pip — `PYTHON_EXE` (the old, macOS-broken constant 
 Facility location on Valhalla cost matrices via [pysal/spopt](https://github.com/pysal/spopt),
 re-done from the old gis-ops Network Analyst plugin (not a verbatim port). Staged PRs:
 ① deps install (**done**, see Dependencies) → ② out-of-process runner + client (**done**) → ③ LSCP
-Processing algo (**done**) → ④ MCLP → ⑤ **dock integration** (below the existing endpoints,
+Processing algo (**done**) → ④ MCLP (**done**) → ⑤ **dock integration** (below the existing endpoints,
 visually separated; NOT a separate dialog — `resources/ui/dlg_spopt.ui` is only kept as the 2021
 layout reference, its `dlg_spopt.py` is gone).
 p-center/p-median are deferred: solves take minutes (200×40: CBC 344 s / 568 s) and need real
@@ -307,8 +307,11 @@ Decisions behind the design:
   level** (numpy/pulp/spopt go inside `solve()`). stdout is the result channel (redirected to
   stderr during the solve), exit 0/1. Child env: `PYTHONPATH` = **only** the spopt tree, never
   the host's. Matrix is clients (rows) × facilities (cols).
-- `fac2cli[j]` = all clients within the radius of selected facility j (MCLP: only covered ones);
-  a client can appear under several facilities — that's spopt's coverage semantics.
+- `fac2cli[j]` = the clients within the radius of facility j, **`None` if j wasn't selected**.
+  A selected facility can have `[]`: MCLP sites exactly p facilities and a predefined one is
+  selected wherever it is — with a plain `[]` for "unselected" those silently vanished from the
+  output. A client can appear under several facilities (coverage semantics). Coverage is purely
+  geometric (`model.aij`), not spopt's `cli_vars`, which leave a zero-weight client "uncovered".
 - spopt reads solutions with `var.value() > 0`; with non-CBC solvers (HiGHS) near-zero noise
   made MCLP report 10 of p=5 facilities. The runner calls `model.problem.solve()` directly
   (bypassing spopt's `solve()`/result arrays) and thresholds (`> 0.5`) itself.
@@ -327,17 +330,20 @@ Decisions behind the design:
   never last-one-wins: a repeated (source, target) pair in the matrix, or a matrix ID matching
   several layer features (non-unique ID field). Lines transform the facility
   end into the demand CRS. Subclasses set `PROBLEM` + `init_problem_params`/`get_problem_kwargs`;
-  `coverage_mixin.py:CoverageMixin` = service radius + predefined field (LSCP, MCLP).
+  `coverage_mixin.py:CoverageMixin` = service radius + predefined field (LSCP, MCLP). MCLP adds
+  the number of facilities and an optional demand weight field; its demand output only holds
+  the **covered** demand points.
 - `DEFAULT_LAYER_FIELDS` (`global_definitions.py`) holds **shared `QgsField` objects**, also used
   by the dock: copy before `setType()`/renaming. `matrix_base` used to set the ID types on them
   in place, so one string-ID run turned every later matrix' `source`/`target` into strings.
 - Tests: `tests/test_localhost_plugin/test_utils/test_spopt.py` (real subprocess) and
-  `…/test_processing/test_lscp.py` (static `tests/data/matrix.geojson`, **no valhalla needed**);
-  both install spopt into the profile on first run (~660 MB).
+  `…/test_processing/test_{lscp,mclp}.py` on `spopt_base.SpoptProcessingBase` (static
+  `tests/data/matrix.geojson`, **no valhalla needed**); all install spopt into the profile on
+  first run (~660 MB).
 - **Test-harness gotcha**: reading *any* OGR layer under `get_qgis_app()` crashes the process
   at exit (`std::bad_alloc` after the atexit `exitQgis()`; QGIS 4.2.1 / GDAL 3.13.3 — a bare
   `QgsApplication` exits fine). Tests load the GeoJSON fixtures into **memory layers** with stdlib
-  json (`test_lscp.load_geojson`) instead.
+  json (`spopt_base.load_geojson`) instead.
 
 ## Running the valhalla binaries (all three platforms since pyvalhalla 3.9.0)
 

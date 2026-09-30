@@ -1,3 +1,15 @@
-# MCLP
+The <b>Maximal Coverage Location Problem (MCLP)</b> locates a fixed number of facilities so that as much demand as possible is covered within a service radius. It's solved with <a href="https://github.com/pysal/spopt">pysal/spopt</a>, which needs to be installed in the plugin settings first.
 
-The Maximum Coverage Location Problem maximizes the amount of demand points covered within a maximal service radius by locating a fixed number of facilities.
+<b>Cost matrix</b>: the output of a <i>Matrix</i> algorithm with the candidate facilities as layer 1 (sources) and the demand points as layer 2 (targets). Unroutable pairs count as not covered.
+
+<b>Facility / demand point layers</b>: the same layers <b>and the same ID fields</b> as used for the matrix, to join the geometries onto the result. Without an ID field, feature IDs are used, just like the <i>Matrix</i> algorithms do. If the ID fields differ from the matrix run, the result may be joined to the wrong features.
+
+<b>Number of facilities</b>: how many facilities to site, at most the number of candidates.
+
+<b>Service radius</b>: in the unit of the cost metric, i.e. seconds for <i>duration</i> (the default) or meters for <i>distance</i>.
+
+<b>Predefined facilities</b> (optional): a numeric facility field, 1 = the facility must be part of the solution.
+
+<b>Demand point weights</b> (optional): a numeric demand point field with the amount of demand, e.g. population. Without it every demand point weighs the same.
+
+The <i>facilities</i> output holds the selected facilities with the number of demand points they cover. The <i>demand points</i> output has one feature per covering facility and its cost, so a demand point within the radius of several selected facilities appears once for each. Demand points which aren't covered by any selected facility are not part of it. Optionally they're drawn as lines to their facility.

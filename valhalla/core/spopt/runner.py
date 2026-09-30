@@ -39,7 +39,8 @@ class SolveRequest:
 @dataclass
 class SolveResponse:
     status: Optional[str] = None
-    fac2cli: Optional[List[List[int]]] = None  # per facility: covered client indices
+    # per facility: the client indices it covers (may be none), null if it wasn't selected
+    fac2cli: Optional[List[Optional[List[int]]]] = None
     error: Optional[str] = None
 
 
@@ -75,22 +76,19 @@ def _build(req: SolveRequest, np, spopt_locate):
     raise InputError(f"Unsupported problem type '{problem.value}'")
 
 
-def _fac2cli(model) -> List[List[int]]:
-    """spopt's facility_client_array(), just with a tolerant threshold."""
-    cli_vars = getattr(model, "cli_vars", None)  # only mclp: not every client is covered
-    n_clients = model.aij.shape[0]
-    fac2cli = []
-    for j, fac_var in enumerate(model.fac_vars):
-        clients = []
-        if fac_var.value() > _SELECTED:
-            clients = [
-                i
-                for i in range(n_clients)
-                if model.aij[i, j] > 0 and (cli_vars is None or cli_vars[i].value() > _SELECTED)
-            ]
-        fac2cli.append(clients)
+def _fac2cli(model) -> List[Optional[List[int]]]:
+    """
+    Like spopt's facility_client_array(), but with a tolerant threshold and telling a facility
+    which wasn't selected (None) from a selected one covering nobody ([]): MCLP sites exactly
+    p facilities and a predefined one is selected wherever it is.
 
-    return fac2cli
+    A client is covered by every selected facility within the service radius (model.aij).
+    """
+    n_clients = model.aij.shape[0]
+    return [
+        [i for i in range(n_clients) if model.aij[i, j] > 0] if fac_var.value() > _SELECTED else None
+        for j, fac_var in enumerate(model.fac_vars)
+    ]
 
 
 def solve(req: SolveRequest) -> SolveResponse:

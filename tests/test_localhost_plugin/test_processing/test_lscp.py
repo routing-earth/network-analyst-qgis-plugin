@@ -1,106 +1,18 @@
-import json
-import unittest
-from typing import List, Tuple
+from qgis.core import QgsFeatureRequest, QgsProcessingException, QgsWkbTypes
 
-from qgis.core import (
-    QgsCoordinateReferenceSystem,
-    QgsFeature,
-    QgsFeatureRequest,
-    QgsField,
-    QgsGeometry,
-    QgsPointXY,
-    QgsProcessingContext,
-    QgsProcessingException,
-    QgsProcessingFeedback,
-    QgsProcessingOutputLayerDefinition,
-    QgsVectorLayer,
-    QgsWkbTypes,
-)
-from qgis.PyQt.QtCore import QVariant
-from tests.utilities import get_qgis_app
+from valhalla.global_definitions import FieldNames
+from valhalla.processing.spatial_optimization.lscp import LSCPAlgorithm
 
-from ... import TEST_DIR
+from .spopt_base import SpoptProcessingBase
 
-QGIS_APP, CANVAS, IFACE, PARENT = get_qgis_app()
-
-from valhalla.core import pypi  # noqa: E402
-from valhalla.global_definitions import FieldNames  # noqa: E402
-from valhalla.processing.spatial_optimization.lscp import LSCPAlgorithm  # noqa: E402
-
-DATA_DIR = TEST_DIR / "data"
-# the matrix in tests/data: facilities 1-3 (source) x demand points 1-15 (target), IDs = "id" field
 RADIUS = 600
 
-_FIELD_TYPES = {int: QVariant.Int, float: QVariant.Double, str: QVariant.String}
 
+class TestLSCP(SpoptProcessingBase):
+    ALG = LSCPAlgorithm
 
-def load_geojson(name: str) -> QgsVectorLayer:
-    """
-    A memory layer from tests/data/<name>.geojson (points or no geometry). Not via OGR: with
-    the get_qgis_app() harness, reading any OGR layer crashes the process at exit (std::bad_alloc
-    after the atexit exitQgis(), seen with QGIS 4.2.1 / GDAL 3.13.3).
-    """
-    data = json.loads(DATA_DIR.joinpath(f"{name}.geojson").read_text())
-    # the files carry OGC URNs, which the memory provider's URI doesn't parse
-    urn = data.get("crs", {}).get("properties", {}).get("name", "urn:ogc:def:crs:OGC:1.3:CRS84")
-    crs = QgsCoordinateReferenceSystem.fromOgcWmsCrs(urn).authid()
-    has_geom = data["features"][0]["geometry"] is not None
-    layer = QgsVectorLayer(f"{'Point' if has_geom else 'None'}?crs={crs}", name, "memory")
-
-    props = data["features"][0]["properties"]
-    layer.dataProvider().addAttributes([QgsField(k, _FIELD_TYPES[type(v)]) for k, v in props.items()])
-    layer.updateFields()
-
-    feats = []
-    for gj_feat in data["features"]:
-        feat = QgsFeature(layer.fields())
-        feat.setAttributes(list(gj_feat["properties"].values()))
-        if has_geom:
-            feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(*gj_feat["geometry"]["coordinates"])))
-        feats.append(feat)
-    layer.dataProvider().addFeatures(feats)
-
-    return layer
-
-
-class TestLSCP(unittest.TestCase):
-    """Needs no valhalla: runs on the static matrix in tests/data. Installs spopt if missing."""
-
-    @classmethod
-    def setUpClass(cls):
-        if not pypi.is_installed(pypi.SPOPT_PKG):
-            pypi.install(pypi.SPOPT_PKG, pypi.PyPiState.NOT_INSTALLED)
-
-        cls.matrix = load_geojson("matrix")
-        cls.facilities = load_geojson("facilities")
-        cls.demand = load_geojson("demand_points")
-        cls.demand_utm = load_geojson("demand_points_utm")
-
-    def run_alg(self, params: dict) -> Tuple[QgsVectorLayer, QgsVectorLayer]:
-        alg = LSCPAlgorithm()
-        alg.initAlgorithm({})
-        ctx = QgsProcessingContext()
-        feedback = QgsProcessingFeedback()
-        params = {
-            alg.IN_MATRIX: self.matrix,
-            alg.IN_FAC: self.facilities,
-            alg.IN_FAC_ID: "id",
-            alg.IN_DEM: self.demand,
-            alg.IN_DEM_ID: "id",
-            alg.IN_SERVICE_RADIUS: RADIUS,
-            alg.OUT_FAC: QgsProcessingOutputLayerDefinition("TEMPORARY_OUTPUT"),
-            alg.OUT_DEM: QgsProcessingOutputLayerDefinition("TEMPORARY_OUTPUT"),
-            **params,
-        }
-        self.assertTrue(alg.prepareAlgorithm(params, ctx, feedback))
-        out = alg.processAlgorithm(params, ctx, feedback)
-
-        # the context owns the temporary layers and deletes them with itself
-        return ctx.takeResultLayer(out[alg.OUT_FAC]), ctx.takeResultLayer(out[alg.OUT_DEM])
-
-    @staticmethod
-    def feats(layer: QgsVectorLayer) -> List[QgsFeature]:
-        return list(layer.getFeatures())
+    def run_alg(self, params: dict):
+        return super().run_alg({"INPUT_SERVICE_RADIUS": RADIUS, **params})
 
     def test_lscp(self):
         fac, dem = self.run_alg({})
