@@ -5,6 +5,7 @@ from typing import List, Tuple
 from qgis.core import (
     QgsCoordinateReferenceSystem,
     QgsFeature,
+    QgsFeatureRequest,
     QgsField,
     QgsGeometry,
     QgsPointXY,
@@ -156,10 +157,29 @@ class TestLSCP(unittest.TestCase):
             with self.assertRaises(QgsProcessingException):
                 self.run_alg({layer_param: None})
 
+    def test_wrong_layer(self):
+        """A layer which doesn't have all the matrix IDs can't be the one the matrix was built with."""
+        with self.assertRaisesRegex(QgsProcessingException, "no features for the matrix IDs 4, 5"):
+            self.run_alg({"INPUT_DEM_POINT_LAYER": self.facilities})
+
     def test_wrong_id_field(self):
-        """Joining on a field the matrix wasn't built with must fail if the IDs don't exist."""
-        with self.assertRaisesRegex(QgsProcessingException, "no features for the matrix IDs"):
+        """Joining on a non-unique field the matrix wasn't built with: all weights are 1."""
+        with self.assertRaisesRegex(QgsProcessingException, "several features for the matrix IDs 1"):
             self.run_alg({"INPUT_DEM_ID": "weights"})
+
+    def test_duplicate_matrix_rows(self):
+        """A (source, target) pair may only appear once, else one cost would silently win."""
+        matrix = self.matrix.materialize(QgsFeatureRequest())
+        matrix.dataProvider().addFeatures([next(self.matrix.getFeatures())])
+        with self.assertRaisesRegex(QgsProcessingException, "more than one row"):
+            self.run_alg({"INPUT_MATRIX_LAYER": matrix})
+
+    def test_duplicate_layer_ids(self):
+        """The ID field must identify the matrix' features unambiguously."""
+        facilities = self.facilities.materialize(QgsFeatureRequest())
+        facilities.dataProvider().addFeatures([next(self.facilities.getFeatures())])
+        with self.assertRaisesRegex(QgsProcessingException, "several features"):
+            self.run_alg({"INPUT_FAC_LAYER": facilities})
 
     def test_infeasible(self):
         with self.assertRaisesRegex(QgsProcessingException, "Infeasible"):
