@@ -1,3 +1,13 @@
-# LSCP
+The <b>Location Set Covering Problem (LSCP)</b> minimizes the number of facilities needed and locates them so that every demand point is covered within a service radius. It's solved with <a href="https://github.com/pysal/spopt">pysal/spopt</a>, which needs to be installed in the plugin settings first.
 
-The Location Set Covering Problem minimizes the number of facilities needed and locates them so that every demand point is covered within a predefined service radius.
+<b>Cost matrix</b>: the output of a <i>Matrix</i> algorithm with the candidate facilities as layer 1 (sources) and the demand points as layer 2 (targets). Unroutable pairs count as not covered.
+
+<b>Service radius</b>: in the unit of the cost metric, i.e. seconds for <i>duration</i> (the default) or meters for <i>distance</i>.
+
+<b>Facility / demand point layers</b>: the same layers <b>and the same ID fields</b> as used for the matrix, to join the geometries onto the result. Without an ID field, feature IDs are used, just like the <i>Matrix</i> algorithms do. If the ID fields differ from the matrix run, the result may be joined to the wrong features.
+
+<b>Predefined facilities</b> (optional): a numeric facility field, 1 = the facility must be part of the solution.
+
+The <i>facilities</i> output holds the selected facilities with the number of demand points they cover. The <i>demand points</i> output has one feature per covering facility and its cost, so a demand point within the radius of several selected facilities appears once for each. Optionally they're drawn as lines to their facility.
+
+If a demand point is out of reach of all facilities there's no solution and the algorithm fails with <i>Infeasible</i>.
