@@ -175,20 +175,22 @@ class SpoptBaseAlgorithm(QgsProcessingAlgorithm):
             return {}
         feedback.setProgress(90)
 
+        # both outputs carry the input attributes, followed by the result's
+
         # facilities output: the selected ones only, with the number of demand points they cover
-        fac_fields = QgsFields()
-        fac_fields.append(self._id_field(FieldNames.ID, fac_source, fac_id_field))
-        fac_fields.append(QgsField(FieldNames.DEMAND_COUNT, QVariant.Int))
+        fac_result_fields = QgsFields()
+        fac_result_fields.append(QgsField(FieldNames.DEMAND_COUNT, QVariant.Int))
+        fac_fields, fac_copied_idx = self._output_fields(fac_source, fac_result_fields)
         fac_sink, fac_dest_id = self.parameterAsSink(
             parameters, self.OUT_FAC, context, fac_fields, fac_source.wkbType(), fac_source.sourceCrs()
         )
 
         # demand output: one feature per (facility, demand point) with its cost, coverage
         # problems may assign a demand point to several facilities
-        dem_fields = QgsFields()
-        dem_fields.append(self._id_field(FieldNames.ID, dem_source, dem_id_field))
-        dem_fields.append(self._id_field(FieldNames.FACILITY_ID, fac_source, fac_id_field))
-        dem_fields.append(QgsField(metric.value, QVariant.Double))
+        dem_result_fields = QgsFields()
+        dem_result_fields.append(self._id_field(FieldNames.FACILITY_ID, fac_source, fac_id_field))
+        dem_result_fields.append(QgsField(metric.value, QVariant.Double))
+        dem_fields, dem_copied_idx = self._output_fields(dem_source, dem_result_fields)
         dem_geom_type = QgsWkbTypes.Type.LineString if draw_lines else dem_source.wkbType()
         dem_crs = dem_source.sourceCrs()
         dem_sink, dem_dest_id = self.parameterAsSink(
@@ -209,7 +211,8 @@ class SpoptBaseAlgorithm(QgsProcessingAlgorithm):
             # add facility feature
             fac_id = fac_layer_ids[fac_idx]
             fac_feat = QgsFeature(fac_fields)
-            fac_feat.setAttributes([fac_id, len(demand_pts)])
+            fac_attrs = fac_feats[fac_id].attributes()
+            fac_feat.setAttributes([fac_attrs[i] for i in fac_copied_idx] + [len(demand_pts)])
             fac_feat.setGeometry(fac_feats[fac_id].geometry())
             fac_sink.addFeature(fac_feat)
 
@@ -217,7 +220,10 @@ class SpoptBaseAlgorithm(QgsProcessingAlgorithm):
             for dem_idx in demand_pts:
                 dem_id = dem_layer_ids[dem_idx]
                 dem_feat = QgsFeature(dem_fields)
-                dem_feat.setAttributes([dem_id, fac_id, cost_matrix[dem_idx][fac_idx]])
+                dem_attrs = dem_feats[dem_id].attributes()
+                dem_feat.setAttributes(
+                    [dem_attrs[i] for i in dem_copied_idx] + [fac_id, cost_matrix[dem_idx][fac_idx]]
+                )
                 if draw_lines:
                     dem_point = dem_feats[dem_id].geometry().asPoint()
                     dem_feat.setGeometry(QgsGeometry.fromPolylineXY([dem_point, fac_points[fac_id]]))
@@ -307,6 +313,43 @@ class SpoptBaseAlgorithm(QgsProcessingAlgorithm):
             return field
 
         return QgsField(name, QVariant.LongLong)
+
+    @staticmethod
+    def _output_fields(
+        source: QgsFeatureSource, result_fields: QgsFields
+    ) -> Tuple[QgsFields, List[int]]:
+        """
+        The input fields followed by the result fields, and the indices of the copied input fields.
+
+        The result fields always keep their names, an input field with the same name gets a
+        suffix instead: re-running on a previous result must not leave e.g. "facility_id" with
+        the old values. Without "fid": a GeoPackage's fid must be unique in a GeoPackage output,
+        but demand points repeat.
+        """
+        # field names are case-insensitive in e.g. GeoPackage and Shapefile
+        result_names = {f.name().lower() for f in result_fields}
+        # a renamed field may not take the name of another input field either
+        taken = result_names | {f.name().lower() for f in source.fields()}
+        fields = QgsFields()
+        indices = list()
+        for idx, field in enumerate(source.fields()):
+            if field.name().lower() == "fid":
+                continue
+            field = QgsField(field)
+            if field.name().lower() in result_names:
+                name, n = field.name(), 2
+                while name.lower() in taken:
+                    name, n = f"{field.name()}_{n}", n + 1
+                field.setName(name)
+                taken.add(name.lower())
+            fields.append(field)
+            indices.append(idx)
+
+        # now we can write the result fields
+        for field in result_fields:
+            fields.append(field)
+
+        return fields, indices
 
     def createInstance(self):
         return type(self)()

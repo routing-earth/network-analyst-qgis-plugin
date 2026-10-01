@@ -8,6 +8,6 @@ The <b>Location Set Covering Problem (LSCP)</b> minimizes the number of faciliti
 
 <b>Predefined facilities</b> (optional): a numeric facility field, 1 = the facility must be part of the solution.
 
-The <i>facilities</i> output holds the selected facilities with the number of demand points they cover. The <i>demand points</i> output has one feature per covering facility and its cost, so a demand point within the radius of several selected facilities appears once for each. Optionally they're drawn as lines to their facility.
+Both outputs keep the attributes of the input layers. The <i>facilities</i> output holds the selected facilities plus the number of demand points they cover. The <i>demand points</i> output has one feature per covering facility, plus that facility's ID and the cost, so a demand point within the radius of several selected facilities appears once for each. Optionally they're drawn as lines to their facility.
 
 If a demand point is out of reach of all facilities there's no solution and the algorithm fails with <i>Infeasible</i>.

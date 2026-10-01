@@ -12,4 +12,4 @@ The <b>Maximal Coverage Location Problem (MCLP)</b> locates a fixed number of fa
 
 <b>Demand point weights</b> (optional): a numeric demand point field with the amount of demand, e.g. population. Without it every demand point weighs the same.
 
-The <i>facilities</i> output holds the selected facilities with the number of demand points they cover. The <i>demand points</i> output has one feature per covering facility and its cost, so a demand point within the radius of several selected facilities appears once for each. Demand points which aren't covered by any selected facility are not part of it. Optionally they're drawn as lines to their facility.
+Both outputs keep the attributes of the input layers. The <i>facilities</i> output holds the selected facilities plus the number of demand points they cover. The <i>demand points</i> output has one feature per covering facility, plus that facility's ID and the cost, so a demand point within the radius of several selected facilities appears once for each. Demand points which aren't covered by any selected facility are not part of it. Optionally they're drawn as lines to their facility.
