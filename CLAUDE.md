@@ -42,16 +42,15 @@ valhalla/                       # plugin source root (this is what gets shipped)
 │   └── settings.py             # ValhallaSettings (QSettings-backed)
 ├── gui/
 │   ├── dock_routing.py         # RoutingDockWidget — main interactive UI
-│   ├── widgets/                # router widget, waypoints, costing settings; unified graphs
-│   │                           #   table (widget_graph_manager + graph_table_model +
-│   │                           #   graph_ops_re/_local controllers)
-│   ├── compiled/*_ui.py        # GENERATED from resources/ui/*.ui — do not hand-edit
+│   ├── widgets/                # router widget, waypoints (widget_waypoints + waypoint_model),
+│   │                           #   costing settings; unified graphs table (widget_graph_manager +
+│   │                           #   graph_table_model + graph_ops_re/_local controllers)
 │   └── dlg_*.py                # dialogs (settings, providers, server log, …)
 ├── processing/
 │   ├── provider.py             # ValhallaProvider (Processing algorithms registry)
 │   └── routing/, spatial_optimization/, …
 ├── resources/
-│   ├── ui/*.ui                 # Qt Designer XML — source of truth for compiled UIs
+│   ├── ui/*.ui                 # Qt Designer XML, loaded at runtime (uic.loadUiType)
 │   └── icons/
 ├── utils/                      # geom, http, layer, logger, qt, resource helpers
 └── third_party/routingpy/      # vendored routing client lib (do not modify directly)
@@ -64,7 +63,7 @@ tests/
 └── scripts/qgis_test_setup.sh  # CI bootstrapping inside QGIS docker images
 
 scripts/
-├── compile_ui.sh               # pyuic6 over resources/ui/*.ui → gui/compiled/*_ui.py
+├── compile_ui.sh               # DEAD since #67 (UIs load at runtime)
 └── pyqt5_to_pyqt6.py           # QGIS official 3to4.py migration script (one-shot use)
 
 .github/workflows/
@@ -351,6 +350,23 @@ Decisions behind the design:
   `QgsApplication` exits fine). Tests load the GeoJSON fixtures into **memory layers** with stdlib
   json (`spopt_base.load_geojson`) instead.
 
+## Waypoint table: one model, a column schema per kind (`gui/widgets/waypoint_model.py`)
+
+The dock's waypoint table is model/view, not `QTableWidget` + cell widgets:
+- `Waypoint(lon, lat, attrs)` rows (WGS84) in a `WaypointModel(QAbstractTableModel)`; the
+  columns come from a **`TableKind`** (`Column(key, header, kind: CHOICE|INT|FLOAT|TEXT|BOOL,
+  default, choices, persistent)` + annotation layer name + `marker(row, n, wp) -> svg`).
+  `ROUTING` is the Valhalla locations schema (type/side/radius/extra). New table flavours
+  (spopt, VRP) are **just another `TableKind`** — model, delegate and widget stay generic.
+- Rows keep attributes the current schema doesn't show (`set_kind` re-defaults, never drops).
+- `WaypointDelegate` builds editors per column kind; `persistent=True` columns keep an editor
+  open (the old cell-widget look) — it commits on every change since it never closes. A
+  persistent editor is a widget per cell: don't use it for big tables.
+- Code and tests go through `waypoints_widget.add_waypoint(lon, lat, **attrs)`,
+  `.waypoints`, `.model` — **no column indices** (the old code hardcoded 0–4 everywhere).
+- `tests/…/test_waypoint_model.py` runs Qt's `QAbstractItemModelTester` (Warning mode, failures
+  collected via `qInstallMessageHandler` — Fatal mode just core-dumps the test process).
+
 ## Running the valhalla binaries (all three platforms since pyvalhalla 3.9.0)
 
 Windows is **no longer** HTTP-only: the win_amd64 pyvalhalla wheel ships
@@ -381,7 +397,7 @@ Two Windows-only facts make this work, both hidden behind helpers in `utils/reso
 
 These will keep biting — check first when something breaks after touching v4 code:
 
-1. **Enum scoping.** PyQt6 requires fully scoped enum access. `Qt.LeftButton` → `Qt.MouseButton.LeftButton`; `QDialogButtonBox.Ok` → `QDialogButtonBox.StandardButton.Ok`; `QDir.Dirs` → `QDir.Filter.Dirs`. The compiled UI files were regenerated with `pyuic6` to handle this for generated code — but hand-written code (especially `tests/`) still needs manual fixes.
+1. **Enum scoping.** PyQt6 requires fully scoped enum access. `Qt.LeftButton` → `Qt.MouseButton.LeftButton`; `QDialogButtonBox.Ok` → `QDialogButtonBox.StandardButton.Ok`; `QDir.Dirs` → `QDir.Filter.Dirs`. The `.ui` files need the scoped form too (they're loaded at runtime, see "UI files"), and so does hand-written code (especially `tests/`).
 2. **Class relocations.** `QFileSystemModel` moved from `QtWidgets` to `QtGui`. `QAction` moved from `QtWidgets` to `QtGui`. `QRegExp` removed → use `QRegularExpression`.
 3. **`QSortFilterProxyModel` + `QFileSystemModel` is brittle in Qt6.** `proxy.mapFromSource(idx)` walks the source index's parent chain; `QFileSystemModel` only fetches children of `setRootPath`, never the ancestor chain. Result: `mapFromSource` returns invalid even when `model.index(path)` is valid. Fix used in this repo: drop the proxy, use `QFileSystemWatcher` + explicit `iterdir()`-based models (see `widget_router.py` and `graph_table_model.py`).
 4. **Stale `.pyc`.** When refactoring imports, clear `__pycache__/` — Python's mtime-based invalidation can lag and produce confusing tracebacks referring to old import statements.
@@ -418,9 +434,6 @@ Don't pad with trivia (file-by-file changelogs, one-off bugs we already fixed). 
 ## Quick commands
 
 ```shell
-# Recompile UI after .ui edit
-bash scripts/compile_ui.sh
-
 # Clear stale bytecode (do this any time you refactor imports)
 find tests valhalla -type d -name __pycache__ -exec rm -rf {} +
 

@@ -17,7 +17,7 @@ from qgis.core import (
 from qgis.gui import QgsMapCanvas, QgsMapMouseEvent
 from qgis.PyQt.QtCore import QEvent, QPoint, Qt, QTimer
 from qgis.PyQt.QtTest import QTest
-from qgis.PyQt.QtWidgets import QApplication, QDialogButtonBox, QTableWidget
+from qgis.PyQt.QtWidgets import QApplication, QDialogButtonBox
 
 from .... import LocalhostDockerTestCase
 from ....constants import WAYPOINTS_3857, WAYPOINTS_4326
@@ -73,7 +73,6 @@ class TestWaypointsWidget(LocalhostDockerTestCase):
         self.assertTrue(self.dlg.isVisible())
 
     def test_get_valhalla_locations(self):
-        table = self.dlg.waypoints_widget.ui_table
         self.dlg.setVisible(True)
 
         types = [LocationType.BREAK_THROUGH, LocationType.THROUGH, LocationType.VIA]
@@ -99,15 +98,13 @@ class TestWaypointsWidget(LocalhostDockerTestCase):
 
         # add the points to the table
         for row_id, pt in enumerate(WAYPOINTS_4326):
-            table.insertRow(row_id)
-            self.dlg.waypoints_widget._add_row_to_table(
-                row_id,
-                pt[1],
+            self.dlg.waypoints_widget.add_waypoint(
                 pt[0],
-                types[row_id],
-                sides[row_id],
-                radiuses[row_id],
-                unquote(urlencode(extra_params[row_id])),
+                pt[1],
+                type=types[row_id],
+                preferred_side=sides[row_id],
+                radius=radiuses[row_id],
+                extra=unquote(urlencode(extra_params[row_id])),
             )
 
         for idx, loc in enumerate(self.dlg.waypoints_widget.get_locations(RouterType.VALHALLA)):
@@ -128,14 +125,11 @@ class TestWaypointsWidget(LocalhostDockerTestCase):
         self.add_waypoints(WAYPOINTS_3857)
 
         # we have 3 coordinates in there and they're properly projected from 3857 to 4326
-        self.assertEqual(table.rowCount(), 3)
-        for row_id in range(table.rowCount()):
-            self.assertAlmostEqual(
-                table.item(row_id, 4).data(Qt.ItemDataRole.UserRole)[0], WAYPOINTS_4326[row_id][0], 5
-            )
-            self.assertAlmostEqual(
-                table.item(row_id, 4).data(Qt.ItemDataRole.UserRole)[1], WAYPOINTS_4326[row_id][1], 5
-            )
+        self.assertEqual(table.model().rowCount(), 3)
+        waypoints = self.dlg.waypoints_widget.waypoints
+        for row_id in range(table.model().rowCount()):
+            self.assertAlmostEqual(waypoints[row_id].lon, WAYPOINTS_4326[row_id][0], 5)
+            self.assertAlmostEqual(waypoints[row_id].lat, WAYPOINTS_4326[row_id][1], 5)
 
     def test_remove_waypoints(self):
         table = self.dlg.waypoints_widget.ui_table
@@ -145,21 +139,21 @@ class TestWaypointsWidget(LocalhostDockerTestCase):
         # select the first point and remove it
         table.selectRow(0)
         QTest.mouseClick(self.dlg.waypoints_widget.ui_btn_rm_pt, Qt.MouseButton.LeftButton)
-        self.assertEqual(table.rowCount(), 2)
+        self.assertEqual(table.model().rowCount(), 2)
 
         # make sure it's the actually the first one that was removed
-        first_pt = table.item(0, 4).data(Qt.ItemDataRole.UserRole)
-        self.assertAlmostEqual(first_pt[0], WAYPOINTS_4326[1][0], 5)
-        self.assertAlmostEqual(first_pt[1], WAYPOINTS_4326[1][1], 5)
+        first_pt = self.dlg.waypoints_widget.waypoints[0]
+        self.assertAlmostEqual(first_pt.lon, WAYPOINTS_4326[1][0], 5)
+        self.assertAlmostEqual(first_pt.lat, WAYPOINTS_4326[1][1], 5)
 
     def test_clear_all_waypoints(self):
         table = self.dlg.waypoints_widget.ui_table
         self.dlg.setVisible(True)
         self.add_waypoints(WAYPOINTS_3857)
 
-        self.assertEqual(table.rowCount(), 3)
+        self.assertEqual(table.model().rowCount(), 3)
         QTest.mouseClick(self.dlg.waypoints_widget.ui_btn_rm_all, Qt.MouseButton.LeftButton)
-        self.assertEqual(table.rowCount(), 0)
+        self.assertEqual(table.model().rowCount(), 0)
 
     def test_move_item_up(self):
         table = self.dlg.waypoints_widget.ui_table
@@ -167,14 +161,15 @@ class TestWaypointsWidget(LocalhostDockerTestCase):
         self.add_waypoints(WAYPOINTS_3857)
 
         # remember the old configuration before moving rows
-        old_first = table.item(0, 0)
-        old_second = table.item(1, 0)
+        waypoints = self.dlg.waypoints_widget.waypoints
+        old_first, old_second = waypoints[0], waypoints[1]
 
         table.selectRow(1)
         QTest.mouseClick(self.dlg.waypoints_widget.ui_btn_up, Qt.MouseButton.LeftButton)
 
-        self.assertEqual(old_first, table.item(1, 0))
-        self.assertEqual(old_second, table.item(0, 0))
+        self.assertIs(old_first, waypoints[1])
+        self.assertIs(old_second, waypoints[0])
+        self.assertEqual(table.currentIndex().row(), 0)
 
     def test_move_item_down(self):
         table = self.dlg.waypoints_widget.ui_table
@@ -182,14 +177,15 @@ class TestWaypointsWidget(LocalhostDockerTestCase):
         self.add_waypoints(WAYPOINTS_3857)
 
         # remember the old configuration before moving rows
-        old_first = table.item(1, 0)
-        old_second = table.item(2, 0)
+        waypoints = self.dlg.waypoints_widget.waypoints
+        old_first, old_second = waypoints[1], waypoints[2]
 
         table.selectRow(1)
         QTest.mouseClick(self.dlg.waypoints_widget.ui_btn_down, Qt.MouseButton.LeftButton)
 
-        self.assertEqual(old_first, table.item(2, 0))
-        self.assertEqual(old_second, table.item(1, 0))
+        self.assertIs(old_first, waypoints[2])
+        self.assertIs(old_second, waypoints[1])
+        self.assertEqual(table.currentIndex().row(), 2)
 
     def test_from_layer(self):
         self.dlg.setVisible(True)
@@ -216,14 +212,11 @@ class TestWaypointsWidget(LocalhostDockerTestCase):
 
         # test we got 3 points and they were properly transformed to 4326
         table = self.dlg.waypoints_widget.ui_table
-        self.assertEqual(table.rowCount(), 3)
-        for row_id in range(table.rowCount()):
-            self.assertAlmostEqual(
-                table.item(row_id, 4).data(Qt.ItemDataRole.UserRole)[0], WAYPOINTS_4326[row_id][0], 5
-            )
-            self.assertAlmostEqual(
-                table.item(row_id, 4).data(Qt.ItemDataRole.UserRole)[1], WAYPOINTS_4326[row_id][1], 5
-            )
+        self.assertEqual(table.model().rowCount(), 3)
+        waypoints = self.dlg.waypoints_widget.waypoints
+        for row_id in range(table.model().rowCount()):
+            self.assertAlmostEqual(waypoints[row_id].lon, WAYPOINTS_4326[row_id][0], 5)
+            self.assertAlmostEqual(waypoints[row_id].lat, WAYPOINTS_4326[row_id][1], 5)
 
     def test_from_valhalla_json(self):
         self.dlg.setVisible(True)
@@ -263,19 +256,16 @@ class TestWaypointsWidget(LocalhostDockerTestCase):
         self.dlg.waypoints_widget._handle_from_valhalla_json()
 
         # test we got 3 points and they were properly transformed to 4326
-        table: QTableWidget = self.dlg.waypoints_widget.ui_table
-        self.assertEqual(self.dlg.waypoints_widget.ui_table.rowCount(), 3)
-        for row_id in range(table.rowCount()):
-            self.assertEqual(table.cellWidget(row_id, 0).currentText(), "via")
-            self.assertEqual(table.cellWidget(row_id, 1).currentText(), "same")
-            self.assertEqual(int(table.cellWidget(row_id, 2).value()), 10)
-            assertQueryStringEqual(table.item(row_id, 3).text(), unquote(urlencode(extra_params)))
-            self.assertAlmostEqual(
-                table.item(row_id, 4).data(Qt.ItemDataRole.UserRole)[0], WAYPOINTS_4326[row_id][0], 5
-            )
-            self.assertAlmostEqual(
-                table.item(row_id, 4).data(Qt.ItemDataRole.UserRole)[1], WAYPOINTS_4326[row_id][1], 5
-            )
+        table = self.dlg.waypoints_widget.ui_table
+        self.assertEqual(self.dlg.waypoints_widget.ui_table.model().rowCount(), 3)
+        waypoints = self.dlg.waypoints_widget.waypoints
+        for row_id in range(table.model().rowCount()):
+            self.assertEqual(waypoints[row_id].attrs["type"], "via")
+            self.assertEqual(waypoints[row_id].attrs["preferred_side"], "same")
+            self.assertEqual(waypoints[row_id].attrs["radius"], 10)
+            assertQueryStringEqual(waypoints[row_id].attrs["extra"], unquote(urlencode(extra_params)))
+            self.assertAlmostEqual(waypoints[row_id].lon, WAYPOINTS_4326[row_id][0], 5)
+            self.assertAlmostEqual(waypoints[row_id].lat, WAYPOINTS_4326[row_id][1], 5)
 
         # try the same with a full valhalla request json
         self.dlg.waypoints_widget._handle_clear_locations()
@@ -288,18 +278,15 @@ class TestWaypointsWidget(LocalhostDockerTestCase):
         self.dlg.waypoints_widget._handle_from_valhalla_json()
 
         # test we got 3 points and they were properly transformed to 4326
-        self.assertEqual(self.dlg.waypoints_widget.ui_table.rowCount(), 3)
-        for row_id in range(table.rowCount()):
-            self.assertEqual(table.cellWidget(row_id, 0).currentText(), "via")
-            self.assertEqual(table.cellWidget(row_id, 1).currentText(), "same")
-            self.assertEqual(int(table.cellWidget(row_id, 2).value()), 10)
-            assertQueryStringEqual(table.item(row_id, 3).text(), unquote(urlencode(extra_params)))
-            self.assertAlmostEqual(
-                table.item(row_id, 4).data(Qt.ItemDataRole.UserRole)[0], WAYPOINTS_4326[row_id][0], 5
-            )
-            self.assertAlmostEqual(
-                table.item(row_id, 4).data(Qt.ItemDataRole.UserRole)[1], WAYPOINTS_4326[row_id][1], 5
-            )
+        self.assertEqual(self.dlg.waypoints_widget.ui_table.model().rowCount(), 3)
+        waypoints = self.dlg.waypoints_widget.waypoints
+        for row_id in range(table.model().rowCount()):
+            self.assertEqual(waypoints[row_id].attrs["type"], "via")
+            self.assertEqual(waypoints[row_id].attrs["preferred_side"], "same")
+            self.assertEqual(waypoints[row_id].attrs["radius"], 10)
+            assertQueryStringEqual(waypoints[row_id].attrs["extra"], unquote(urlencode(extra_params)))
+            self.assertAlmostEqual(waypoints[row_id].lon, WAYPOINTS_4326[row_id][0], 5)
+            self.assertAlmostEqual(waypoints[row_id].lat, WAYPOINTS_4326[row_id][1], 5)
 
     def test_from_osrm_url(self):
         self.dlg.setVisible(True)
@@ -334,18 +321,15 @@ class TestWaypointsWidget(LocalhostDockerTestCase):
 
         # test we got 3 points and they were properly transformed to 4326
         table = self.dlg.waypoints_widget.ui_table
-        self.assertEqual(self.dlg.waypoints_widget.ui_table.rowCount(), 3)
-        for row_id in range(table.rowCount()):
-            self.assertEqual(table.cellWidget(row_id, 0).currentText(), "break")
-            self.assertEqual(table.cellWidget(row_id, 1).currentText(), "either")
-            self.assertEqual(int(table.cellWidget(row_id, 2).value()), int(radiuses[row_id]))
-            assertQueryStringEqual(table.item(row_id, 3).text(), f"heading={bearings[row_id]}")
-            self.assertAlmostEqual(
-                table.item(row_id, 4).data(Qt.ItemDataRole.UserRole)[0], WAYPOINTS_4326[row_id][0], 5
-            )
-            self.assertAlmostEqual(
-                table.item(row_id, 4).data(Qt.ItemDataRole.UserRole)[1], WAYPOINTS_4326[row_id][1], 5
-            )
+        self.assertEqual(self.dlg.waypoints_widget.ui_table.model().rowCount(), 3)
+        waypoints = self.dlg.waypoints_widget.waypoints
+        for row_id in range(table.model().rowCount()):
+            self.assertEqual(waypoints[row_id].attrs["type"], "break")
+            self.assertEqual(waypoints[row_id].attrs["preferred_side"], "either")
+            self.assertEqual(waypoints[row_id].attrs["radius"], int(radiuses[row_id]))
+            assertQueryStringEqual(waypoints[row_id].attrs["extra"], f"heading={bearings[row_id]}")
+            self.assertAlmostEqual(waypoints[row_id].lon, WAYPOINTS_4326[row_id][0], 5)
+            self.assertAlmostEqual(waypoints[row_id].lat, WAYPOINTS_4326[row_id][1], 5)
 
     def test_waypoints_layer(self):
         self.dlg.setVisible(True)
@@ -390,18 +374,18 @@ class TestWaypointsWidget(LocalhostDockerTestCase):
             # first write a project with 3 coords, clear the table, then write a project with 2 coords
             # write to project with all waypoints intact
             self.add_waypoints(WAYPOINTS_4326)
-            self.assertEqual(self.dlg.waypoints_widget.ui_table.rowCount(), 3)
+            self.assertEqual(self.dlg.waypoints_widget.ui_table.model().rowCount(), 3)
             QgsProject.instance().write(p1.name)
 
             self.dlg.waypoints_widget._handle_clear_locations()
 
             self.add_waypoints(WAYPOINTS_3857[:2])
-            self.assertEqual(self.dlg.waypoints_widget.ui_table.rowCount(), 2)
+            self.assertEqual(self.dlg.waypoints_widget.ui_table.model().rowCount(), 2)
             QgsProject.instance().write(p2.name)
 
             # now open one after the other and check that the table was updated accordingly
             QgsProject.instance().read(p1.name)
-            self.assertEqual(self.dlg.waypoints_widget.ui_table.rowCount(), 3)
+            self.assertEqual(self.dlg.waypoints_widget.ui_table.model().rowCount(), 3)
 
             QgsProject.instance().read(p2.name)
-            self.assertEqual(self.dlg.waypoints_widget.ui_table.rowCount(), 2)
+            self.assertEqual(self.dlg.waypoints_widget.ui_table.model().rowCount(), 2)
