@@ -330,6 +330,12 @@ Decisions behind the design:
   never last-one-wins: a repeated (source, target) pair in the matrix, or a matrix ID matching
   several layer features (non-unique ID field). Lines transform the facility
   end into the demand CRS. Subclasses set `PROBLEM` + `init_problem_params`/`get_problem_kwargs`;
+  Outputs = the **input attributes** + the result fields (`demand_count`; `facility_id` + cost).
+  **Result fields always keep their names**; a clashing input field is renamed (`_2`, `_3`, …,
+  case-insensitive, never onto another input field's name) — deliberately the opposite of
+  `QgsProcessingUtils.combineFields`, because feeding a previous result back in would otherwise
+  leave `facility_id`/`duration` holding the old run's values. A `fid` attribute is not copied
+  (demand rows repeat → GeoPackage unique-constraint failure).
   `coverage_mixin.py:CoverageMixin` = service radius + predefined field (LSCP, MCLP). MCLP adds
   the number of facilities and an optional demand weight field; its demand output only holds
   the **covered** demand points.

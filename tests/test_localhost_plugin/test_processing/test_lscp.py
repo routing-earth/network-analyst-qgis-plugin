@@ -1,4 +1,5 @@
-from qgis.core import QgsFeatureRequest, QgsProcessingException, QgsWkbTypes
+from qgis.core import QgsFeatureRequest, QgsField, QgsProcessingException, QgsWkbTypes
+from qgis.PyQt.QtCore import QVariant
 
 from valhalla.global_definitions import FieldNames
 from valhalla.processing.spatial_optimization.lscp import LSCPAlgorithm
@@ -36,6 +37,39 @@ class TestLSCP(SpoptProcessingBase):
         demand_geoms = {f["id"]: f.geometry().asWkt() for f in self.demand.getFeatures()}
         for f in self.feats(dem):
             self.assertEqual(f.geometry().asWkt(), demand_geoms[f[FieldNames.ID]])
+
+    def test_input_attributes(self):
+        """
+        Both outputs carry the input attributes. The result fields keep their names, a clashing
+        input field (e.g. from feeding back a previous result) is renamed.
+        """
+        demand = self.demand.materialize(QgsFeatureRequest())
+        demand.dataProvider().addAttributes(
+            [QgsField("FACILITY_ID", QVariant.String), QgsField("facility_id_2", QVariant.String)]
+        )
+        demand.updateFields()
+        demand.dataProvider().changeAttributeValues(
+            {f.id(): {2: "stale", 3: "taken"} for f in demand.getFeatures()}
+        )
+        fac, dem = self.run_alg({"INPUT_DEM_POINT_LAYER": demand})
+
+        self.assertEqual(fac.fields().names(), ["id", "predefined", FieldNames.DEMAND_COUNT])
+        self.assertEqual(
+            dem.fields().names(),
+            [
+                "id",
+                "weights",
+                "FACILITY_ID_3",
+                "facility_id_2",
+                FieldNames.FACILITY_ID,
+                FieldNames.DURATION,
+            ],
+        )
+        weights = {f["id"]: f["weights"] for f in self.demand.getFeatures()}
+        for f in self.feats(dem):
+            self.assertEqual(f["weights"], weights[f["id"]])
+            self.assertEqual(f["FACILITY_ID_3"], "stale")
+            self.assertIn(f[FieldNames.FACILITY_ID], {1, 2, 3})
 
     def test_feature_id_fallback(self):
         """Without ID fields the matrix IDs are feature IDs, which here equal the "id" field."""
