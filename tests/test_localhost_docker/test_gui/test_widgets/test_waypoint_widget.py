@@ -31,7 +31,8 @@ from valhalla.gui.dlg_from_json import FromValhallaJsonDialog
 from valhalla.gui.dlg_from_lyr import FromLayerDialog
 from valhalla.gui.dlg_from_osrm_url import FromOsrmUrlDialog
 from valhalla.gui.dock_routing import RoutingDockWidget
-from valhalla.gui.widgets.widget_waypoints import LocationType, PreferredSide
+from valhalla.gui.widgets.waypoint_model import ROUTING, SPOPT
+from valhalla.gui.widgets.widget_waypoints import PROJECT_SCOPE, LocationType, PreferredSide
 
 
 class TestWaypointsWidget(LocalhostDockerTestCase):
@@ -45,7 +46,9 @@ class TestWaypointsWidget(LocalhostDockerTestCase):
         cls.dlg = RoutingDockWidget(IFACE)
 
     def tearDown(self) -> None:
-        self.dlg.waypoints_widget._handle_clear_locations()
+        for kind in (SPOPT, ROUTING):
+            self.dlg.waypoints_widget.set_kind(kind)
+            self.dlg.waypoints_widget._handle_clear_locations()
         QgsProject.instance().removeAllMapLayers()
 
     def add_waypoints(self, points):
@@ -389,3 +392,139 @@ class TestWaypointsWidget(LocalhostDockerTestCase):
 
             QgsProject.instance().read(p2.name)
             self.assertEqual(self.dlg.waypoints_widget.ui_table.model().rowCount(), 2)
+
+    def test_kinds_keep_their_points(self):
+        """Every table kind has its own points and annotation layer."""
+        widget = self.dlg.waypoints_widget
+        self.dlg.setVisible(True)
+        self.add_waypoints(WAYPOINTS_3857[:1])
+
+        widget.set_kind(SPOPT)
+        self.assertEqual(widget.model.rowCount(), 0)
+        self.assertEqual(widget.model.columnCount(), len(SPOPT.columns))
+        self.add_waypoints(WAYPOINTS_3857)
+        self.assertEqual([wp.attrs["role"] for wp in widget.waypoints], ["demand"] * 3)
+
+        # both layers exist, only the shown kind's is visible
+        root = QgsProject.instance().layerTreeRoot()
+        spopt_lyr = QgsProject.instance().mapLayersByName(SPOPT.ann_layer_name)[0]
+        routing_lyr = QgsProject.instance().mapLayersByName(ROUTING.ann_layer_name)[0]
+        self.assertEqual(len(spopt_lyr.items()), 3)
+        self.assertFalse(root.findLayer(routing_lyr.id()).isVisible())
+
+        widget.set_kind(ROUTING)
+        self.assertEqual(widget.model.rowCount(), 1)
+        self.assertTrue(root.findLayer(routing_lyr.id()).isVisible())
+        self.assertFalse(root.findLayer(spopt_lyr.id()).isVisible())
+        # the routing requests only ever see routing points
+        self.assertEqual(len(widget.get_locations(RouterType.VALHALLA)), 1)
+
+    def test_add_modes(self):
+        """The add button's menu picks what the clicked points become."""
+        widget = self.dlg.waypoints_widget
+        self.dlg.setVisible(True)
+        widget.set_kind(SPOPT)
+        add_facilities = [
+            a for a in widget.ui_btn_add_pt.menu().actions() if a.text() == "Add facilities"
+        ]
+        add_facilities[0].trigger()
+        self.assertTrue(widget.ui_btn_add_pt.isChecked())
+        widget.point_tool.canvasClicked.emit(QgsPointXY(*WAYPOINTS_3857[0]), Qt.MouseButton.LeftButton)
+        widget._handle_doubleclick()
+        self.assertEqual(widget.waypoints[0].attrs["role"], "facility")
+
+        # routing has no modes
+        widget.set_kind(ROUTING)
+        self.assertIsNone(widget.ui_btn_add_pt.menu())
+
+    def test_points_saved_in_project(self):
+        """All kinds' points and attributes round-trip through the project file."""
+        widget = self.dlg.waypoints_widget
+        self.dlg.setVisible(True)
+        widget.add_waypoint(*WAYPOINTS_4326[0], radius=42)
+        widget.set_kind(SPOPT)
+        widget.add_waypoint(*WAYPOINTS_4326[1], role="facility", name="depot", predefined=True)
+        widget.add_waypoint(*WAYPOINTS_4326[2], weight=7.5)
+
+        with NamedTemporaryFile(suffix=".qgz") as project_file:
+            QgsProject.instance().write(project_file.name)
+            for kind in (SPOPT, ROUTING):
+                widget.set_kind(kind)
+                widget._handle_clear_locations()
+            QgsProject.instance().read(project_file.name)
+
+        self.assertEqual(widget.models[ROUTING.name].waypoints[0].attrs["radius"], 42)
+        facility, demand = widget.models[SPOPT.name].waypoints
+        self.assertEqual(
+            (facility.attrs["role"], facility.attrs["name"], facility.attrs["predefined"]),
+            ("facility", "depot", True),
+        )
+        self.assertEqual((demand.attrs["role"], demand.attrs["weight"]), ("demand", 7.5))
+        self.assertAlmostEqual(demand.lon, WAYPOINTS_4326[2][0])
+
+    def test_old_project_from_annotations(self):
+        """A project from before the points were stored: routing comes from its markers."""
+        widget = self.dlg.waypoints_widget
+        self.dlg.setVisible(True)
+        self.add_waypoints(WAYPOINTS_3857)
+        QgsProject.instance().removeEntry(PROJECT_SCOPE, "waypoints")
+
+        widget._handle_read_project()
+        self.assertEqual(widget.model.rowCount(), 3)
+        # an annotation layer doesn't keep the order: the reason the points are stored now
+        restored = sorted((wp.lon, wp.lat) for wp in widget.waypoints)
+        for (lon, lat), (exp_lon, exp_lat) in zip(restored, sorted(WAYPOINTS_4326)):
+            self.assertAlmostEqual(lon, exp_lon, 5)
+            self.assertAlmostEqual(lat, exp_lat, 5)
+
+    def test_new_project_clears(self):
+        widget = self.dlg.waypoints_widget
+        self.dlg.setVisible(True)
+        widget.add_waypoint(*WAYPOINTS_4326[0])
+        QgsProject.instance().clear()
+        # a cleared project resets the canvas CRS the other tests rely on
+        CANVAS.setDestinationCrs(QgsCoordinateReferenceSystem.fromEpsgId(3857))
+        self.assertEqual(widget.model.rowCount(), 0)
+
+    def test_from_layer_spopt(self):
+        """A layer import as demand points or facilities, with fields mapped to columns."""
+        widget = self.dlg.waypoints_widget
+        self.dlg.setVisible(True)
+        widget.set_kind(SPOPT)
+        pt_lyr = QgsVectorLayer(
+            "Point?crs=EPSG:3857&field=label:string&field=pop:double&field=fixed:integer",
+            "pts",
+            "memory",
+        )
+        for i, point in enumerate(WAYPOINTS_3857):
+            feat = QgsFeature(pt_lyr.fields())
+            feat.setGeometry(QgsPoint(*point))
+            feat.setAttributes([f"pt{i}", float(i * 10), i % 2])
+            pt_lyr.dataProvider().addFeature(feat)
+        QgsProject.instance().addMapLayer(pt_lyr)
+
+        def import_as(mode_idx: int, mapping: dict):
+            def handle_exec():
+                dlg: FromLayerDialog = QApplication.activeWindow()
+                dlg.mode_combo.setCurrentIndex(mode_idx)
+                for key, field_name in mapping.items():
+                    dlg.field_combos[key].setField(field_name)
+                QTest.mouseClick(
+                    dlg.buttonBox.button(QDialogButtonBox.StandardButton.Ok), Qt.MouseButton.LeftButton
+                )
+
+            QTimer.singleShot(100, handle_exec)
+            widget._handle_from_layer()
+
+        import_as(0, {"name": "label", "weight": "pop"})  # demand points
+        import_as(1, {"predefined": "fixed"})  # facilities
+        demand, facilities = widget.waypoints[:3], widget.waypoints[3:]
+        self.assertEqual([wp.attrs["role"] for wp in demand], ["demand"] * 3)
+        self.assertEqual([wp.attrs["name"] for wp in demand], ["pt0", "pt1", "pt2"])
+        self.assertEqual([wp.attrs["weight"] for wp in demand], [0.0, 10.0, 20.0])
+        self.assertEqual([wp.attrs["role"] for wp in facilities], ["facility"] * 3)
+        self.assertEqual([wp.attrs["predefined"] for wp in facilities], [False, True, False])
+        self.assertAlmostEqual(facilities[1].lat, WAYPOINTS_4326[1][1], 5)
+
+        # the routing-only imports are hidden for spopt
+        self.assertFalse(any(a.isVisible() for a in widget._routing_import_actions))

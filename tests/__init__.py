@@ -23,6 +23,15 @@ SETTINGS_PATH = get_settings_dir().joinpath("settings.ini")
 TEMP_SETTINGS_PATH = get_settings_dir().joinpath("settings_temp.ini")
 
 
+def clear_project_points():
+    """The waypoint tables are kept in the project: a new dock would restore other tests' points."""
+    from qgis.core import QgsProject
+
+    from valhalla.gui.widgets.widget_waypoints import PROJECT_SCOPE
+
+    QgsProject.instance().removeEntry(PROJECT_SCOPE, "waypoints")
+
+
 def is_localhost_runing() -> bool:
     parsed_url = urlparse(URL)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -58,6 +67,8 @@ class LocalhostDockerTestCase(unittest.TestCase):
 
         if SETTINGS_PATH.exists():
             copy(SETTINGS_PATH, TEMP_SETTINGS_PATH)
+
+        clear_project_points()
 
         return super().setUpClass()
 
