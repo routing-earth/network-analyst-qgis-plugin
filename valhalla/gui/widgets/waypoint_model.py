@@ -15,6 +15,8 @@ from qgis.gui import QgsDoubleSpinBox, QgsSpinBox
 from qgis.PyQt.QtCore import QAbstractTableModel, QModelIndex, Qt
 from qgis.PyQt.QtWidgets import QComboBox, QStyledItemDelegate, QWidget
 
+from ... import PLUGIN_NAME
+
 
 @unique
 class LocationType(str, Enum):
@@ -50,15 +52,44 @@ class Column:
     maximum: float = 100000  # INT/FLOAT only
     # an always-open editor, like a cell widget; costs a widget per cell, so not for big tables
     persistent: bool = False
+    # whether the column applies to a row (by its attributes), else it's blank & read-only
+    applies: Optional[Callable[[Dict[str, Any]], bool]] = None
+
+    def applies_to(self, attrs: Dict[str, Any]) -> bool:
+        return self.applies is None or self.applies(attrs)
 
 
 @dataclass(frozen=True)
-class TableKind:
+class AddMode:
+    """A way to add points, e.g. as facilities: they get ``attrs``."""
+
+    name: str  # one point, e.g. "facility"
+    plural: str
+    attrs: Dict[str, Any]
+
+
+@dataclass(frozen=True)
+class LayerField:
+    """A column which can be filled from a layer's field when importing points."""
+
+    key: str
+    label: str
+    numeric: bool = False
+
+
+@dataclass(frozen=True)
+class WaypointTableKind:
     name: str
     columns: Tuple[Column, ...]
     ann_layer_name: str
     # the marker SVG for row i of n
     marker: Callable[[int, int, "Waypoint"], str]
+    # ways to add points; the first is the default
+    add_modes: Tuple[AddMode, ...] = ()
+    # columns a layer import can fill from the layer's fields
+    layer_fields: Tuple[LayerField, ...] = ()
+    # whether the Valhalla JSON / OSRM URL imports make sense
+    routing_imports: bool = False
 
     def defaults(self) -> Dict[str, Any]:
         return {c.key: c.default for c in self.columns}
@@ -82,7 +113,7 @@ def _routing_marker(row: int, n_rows: int, _: Waypoint) -> str:
 
 
 _LOCATIONS_DOCS = "See https://valhalla.github.io/valhalla/api/turn-by-turn/api-reference/#locations"
-ROUTING = TableKind(
+ROUTING = WaypointTableKind(
     name="routing",
     columns=(
         Column(
@@ -115,13 +146,70 @@ ROUTING = TableKind(
     ),
     ann_layer_name="Valhalla Waypoints",
     marker=_routing_marker,
+    routing_imports=True,
 )
 
 
-class WaypointModel(QAbstractTableModel):
-    def __init__(self, kind: TableKind, parent=None):
+@unique
+class SpoptRole(str, Enum):
+    FACILITY = "facility"
+    DEMAND = "demand"
+
+
+def _is_role(role: SpoptRole) -> Callable[[Dict[str, Any]], bool]:
+    return lambda attrs: attrs.get("role") == role.value
+
+
+SPOPT = WaypointTableKind(
+    name="spopt",
+    columns=(
+        Column(
+            "role",
+            "Type",
+            ColumnKind.CHOICE,
+            SpoptRole.DEMAND.value,
+            "Candidate facility or demand point",
+            tuple(r.value for r in SpoptRole),
+        ),
+        Column("name", "Name", ColumnKind.TEXT, "", "Carried over to the results"),
+        Column(
+            "weight",
+            "Weight",
+            ColumnKind.FLOAT,
+            1.0,
+            "The demand point's weight, e.g. population (MCLP only)",
+            maximum=1e9,
+            applies=_is_role(SpoptRole.DEMAND),
+        ),
+        Column(
+            "predefined",
+            "Predefined",
+            ColumnKind.BOOL,
+            False,
+            "The facility must be part of the solution",
+            applies=_is_role(SpoptRole.FACILITY),
+        ),
+    ),
+    ann_layer_name=f"{PLUGIN_NAME} Facilities & Demand Points",
+    marker=lambda _, __, wp: f"{wp.attrs.get('role', SpoptRole.DEMAND.value)}.svg",
+    add_modes=(
+        AddMode("demand point", "demand points", {"role": SpoptRole.DEMAND.value}),
+        AddMode("facility", "facilities", {"role": SpoptRole.FACILITY.value}),
+    ),
+    layer_fields=(
+        LayerField("name", "Name"),
+        LayerField("weight", "Weight", numeric=True),
+        LayerField("predefined", "Predefined (1 = yes)", numeric=True),
+    ),
+)
+
+KINDS = {k.name: k for k in (ROUTING, SPOPT)}
+
+
+class WaypointTableModel(QAbstractTableModel):
+    def __init__(self, kind: WaypointTableKind, parent=None):
         super().__init__(parent)
-        self.kind = kind
+        self.table_kind = kind
         self._rows: List[Waypoint] = list()
 
     # the API for everybody but Qt
@@ -132,14 +220,14 @@ class WaypointModel(QAbstractTableModel):
         return self._rows
 
     def column(self, col: int) -> Column:
-        return self.kind.columns[col]
+        return self.table_kind.columns[col]
 
     def value(self, row: int, key: str) -> Any:
         """A row's attribute, the kind's default if it was never set."""
         wp = self._rows[row]
         if key in wp.attrs:
             return wp.attrs[key]
-        return next((c.default for c in self.kind.columns if c.key == key), None)
+        return next((c.default for c in self.table_kind.columns if c.key == key), None)
 
     def insert(self, row: int, waypoints: Iterable[Waypoint]):
         """Inserts before ``row``; missing attributes get the kind's defaults."""
@@ -148,7 +236,7 @@ class WaypointModel(QAbstractTableModel):
             return
         self.beginInsertRows(QModelIndex(), row, row + len(waypoints) - 1)
         for offset, wp in enumerate(waypoints):
-            wp.attrs = {**self.kind.defaults(), **wp.attrs}
+            wp.attrs = {**self.table_kind.defaults(), **wp.attrs}
             self._rows.insert(row + offset, wp)
         self.endInsertRows()
 
@@ -178,10 +266,10 @@ class WaypointModel(QAbstractTableModel):
         self._rows.clear()
         self.endResetModel()
 
-    def set_kind(self, kind: TableKind):
+    def set_kind(self, kind: WaypointTableKind):
         """Shows the rows through another schema, their other attributes are kept."""
         self.beginResetModel()
-        self.kind = kind
+        self.table_kind = kind
         for wp in self._rows:
             wp.attrs = {**kind.defaults(), **wp.attrs}
         self.endResetModel()
@@ -192,14 +280,14 @@ class WaypointModel(QAbstractTableModel):
         return 0 if parent.isValid() else len(self._rows)
 
     def columnCount(self, parent=QModelIndex()) -> int:
-        return 0 if parent.isValid() else len(self.kind.columns)
+        return 0 if parent.isValid() else len(self.table_kind.columns)
 
     def headerData(
         self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole
     ):
         if orientation != Qt.Orientation.Horizontal:
             return super().headerData(section, orientation, role)
-        col = self.kind.columns[section]
+        col = self.table_kind.columns[section]
         if role == Qt.ItemDataRole.DisplayRole:
             return col.header
         if role == Qt.ItemDataRole.ToolTipRole:
@@ -210,6 +298,8 @@ class WaypointModel(QAbstractTableModel):
         if not index.isValid():
             return None
         col = self.column(index.column())
+        if not col.applies_to(self._rows[index.row()].attrs):
+            return None
         value = self.value(index.row(), col.key)
         if col.kind == ColumnKind.BOOL:
             if role == Qt.ItemDataRole.CheckStateRole:
@@ -230,14 +320,19 @@ class WaypointModel(QAbstractTableModel):
         elif role != Qt.ItemDataRole.EditRole:
             return False
         self._rows[index.row()].attrs[col.key] = value
-        self.dataChanged.emit(index, index, [role])
+        # the whole row: other columns may (not) apply anymore
+        row = index.row()
+        self.dataChanged.emit(self.index(row, 0), self.index(row, self.columnCount() - 1))
         return True
 
     def flags(self, index: QModelIndex) -> Qt.ItemFlag:
         if not index.isValid():
             return Qt.ItemFlag.NoItemFlags
+        col = self.column(index.column())
+        if not col.applies_to(self._rows[index.row()].attrs):
+            return Qt.ItemFlag.ItemIsSelectable
         flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-        if self.column(index.column()).kind == ColumnKind.BOOL:
+        if col.kind == ColumnKind.BOOL:
             return flags | Qt.ItemFlag.ItemIsUserCheckable
         return flags | Qt.ItemFlag.ItemIsEditable
 
@@ -273,7 +368,7 @@ class WaypointDelegate(QStyledItemDelegate):
         else:
             super().setEditorData(editor, index)
 
-    def setModelData(self, editor: QWidget, model: WaypointModel, index: QModelIndex):
+    def setModelData(self, editor: QWidget, model: WaypointTableModel, index: QModelIndex):
         if isinstance(editor, QComboBox):
             model.setData(index, editor.currentText())
         elif isinstance(editor, (QgsSpinBox, QgsDoubleSpinBox)):

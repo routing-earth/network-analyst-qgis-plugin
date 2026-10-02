@@ -11,7 +11,7 @@ QGIS_APP, CANVAS, IFACE, PARENT = get_qgis_app()
 from valhalla.gui.dock_routing import RoutingDockWidget
 
 # from network_analyst.gui.dlg_spopt import SpoptDialog
-from .. import LocalhostDockerTestCase
+from .. import LocalhostDockerTestCase, clear_project_points
 from ..constants import WAYPOINTS_4326, WAYPOINTS_4326_MAP_MATCH
 
 
@@ -29,6 +29,7 @@ class TestHttpRouting(LocalhostDockerTestCase):
 
     def tearDown(self) -> None:
         QgsProject.instance().removeAllMapLayers()
+        clear_project_points()
 
     def hit_execute(self):
         QTest.mouseClick(self.dlg.execute_btn, Qt.MouseButton.LeftButton)
@@ -90,7 +91,7 @@ class TestHttpRouting(LocalhostDockerTestCase):
         # set to auto
         self.dlg.router_widget.mode_btns.buttons()[2].setChecked(True)
         # add custom map matching waypoints
-        self.dlg.waypoints_widget.model.clear()
+        self.dlg.waypoints_widget.table_model.clear()
         for ix, _ in enumerate(WAYPOINTS_4326_MAP_MATCH):
             self.dlg.waypoints_widget.add_waypoint(*WAYPOINTS_4326_MAP_MATCH[ix])
         self.hit_execute()

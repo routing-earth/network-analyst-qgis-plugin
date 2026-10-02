@@ -287,8 +287,11 @@ Facility location on Valhalla cost matrices via [pysal/spopt](https://github.com
 re-done from the old gis-ops Network Analyst plugin (not a verbatim port). Staged PRs:
 ① deps install (**done**, see Dependencies) → ② out-of-process runner + client (**done**) → ③ LSCP
 Processing algo (**done**) → ④ MCLP (**done**) → ⑤ **dock integration** (below the existing endpoints,
-visually separated; NOT a separate dialog — `resources/ui/dlg_spopt.ui` is only kept as the 2021
-layout reference, its `dlg_spopt.py` is gone).
+visually separated; NOT a separate dialog): ⑤a outputs carry input attributes (**done**), ⑤b
+model/view waypoint table (**done**), ⑤c spopt table kind + dock menu (**done**), ⑤d running
+spopt from the dock (next: matrix via the dock's factory → `QgsProcessingAlgRunnerTask` with
+the algorithms; Execute on an spopt entry currently just says "not yet").
+`resources/ui/dlg_spopt.ui` is only kept as the 2021 layout reference.
 p-center/p-median are deferred: solves take minutes (200×40: CBC 344 s / 568 s) and need real
 cancel UX.
 
@@ -359,6 +362,21 @@ The dock's waypoint table is model/view, not `QTableWidget` + cell widgets:
   `ROUTING` is the Valhalla locations schema (type/side/radius/extra). New table flavours
   (spopt, VRP) are **just another `TableKind`** — model, delegate and widget stay generic.
 - Rows keep attributes the current schema doesn't show (`set_kind` re-defaults, never drops).
+- Kinds: `ROUTING` and `SPOPT` (role facility/demand, name, weight, predefined). A `Column` can
+  have `applies(attrs)`: weight only for demand, predefined only for facilities — elsewhere the
+  cell is blank and read-only, and `setData` refreshes the whole row since the role decides it.
+  `TableKind` also declares `add_modes` (`AddMode(name, plural, attrs)`: the add button becomes
+  a menu, the canvas context menu gets one entry each), `layer_fields` (the From-layer dialog
+  maps layer fields to columns + asks the mode), `routing_imports` (Valhalla JSON/OSRM URL).
+- **Separate points per kind**: `WaypointsWidget.models[kind]` + one annotation layer each;
+  `set_kind` swaps the view's model and shows only that kind's markers. Routing requests
+  always read `models["routing"]`, whatever is shown.
+- **Points live in the project**: every model change writes
+  `QgsProject.writeEntry("valhalla", "waypoints/<kind>", json)`; `projectRead` and `cleared`
+  (new project → empty tables) restore. Annotation layers are only visual. Fallback for
+  older projects: routing points from the "Valhalla Waypoints" markers (their order is lost —
+  an annotation layer keys items by UUID). Tests: `tests.clear_project_points()` in setup/
+  tearDown, or a fresh dock restores earlier tests' points.
 - `WaypointDelegate` builds editors per column kind; `persistent=True` columns keep an editor
   open (the old cell-widget look) — it commits on every change since it never closes. A
   persistent editor is a widget per cell: don't use it for big tables.
@@ -366,6 +384,16 @@ The dock's waypoint table is model/view, not `QTableWidget` + cell widgets:
   `.waypoints`, `.model` — **no column indices** (the old code hardcoded 0–4 everywhere).
 - `tests/…/test_waypoint_model.py` runs Qt's `QAbstractItemModelTester` (Warning mode, failures
   collected via `qInstallMessageHandler` — Fatal mode just core-dumps the test process).
+
+## Dock menu (`gui/dock_routing.py:MENU`)
+
+The sidebar is built from **one table**, `MENU`: `MenuEntry(key, title, tooltip, icon, page,
+kind)`, `None` = separator (a non-selectable thin-line item). Each item stores its **index into
+MENU** in `UserRole`; title, stacked page (by objectName, `setCurrentWidget`), waypoint table
+kind and Execute all resolve through it — never by row position (the old
+`list(MENU_TABS)[currentRow()]` + if-chain broke with the separator). The `.ui` has no menu
+items anymore. The sidebar is icon-only (50 px, names in tooltips), and its stylesheet pads
+items by 6 px: a separator item must stay ≥ 14 px tall or its line widget gets 0 px.
 
 ## Running the valhalla binaries (all three platforms since pyvalhalla 3.9.0)
 

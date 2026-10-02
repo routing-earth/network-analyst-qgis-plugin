@@ -9,15 +9,16 @@ QGIS_APP, CANVAS, IFACE, PARENT = get_qgis_app()
 
 from valhalla.gui.widgets.waypoint_model import (  # noqa: E402
     ROUTING,
+    SPOPT,
     Column,
     ColumnKind,
-    TableKind,
     Waypoint,
     WaypointDelegate,
-    WaypointModel,
+    WaypointTableKind,
+    WaypointTableModel,
 )
 
-OTHER = TableKind(
+OTHER = WaypointTableKind(
     name="other",
     columns=(
         Column("type", "Type", ColumnKind.CHOICE, "a", choices=("a", "b"), persistent=True),
@@ -37,7 +38,7 @@ class TestWaypointModel(unittest.TestCase):
         self.prev_handler = qInstallMessageHandler(
             lambda _, __, msg: self.tester_failures.append(msg) if msg.startswith("FAIL!") else None
         )
-        self.model = WaypointModel(ROUTING)
+        self.model = WaypointTableModel(ROUTING)
         # checks every signal and index for consistency
         self.tester = QAbstractItemModelTester(
             self.model, QAbstractItemModelTester.FailureReportingMode.Warning
@@ -117,3 +118,25 @@ class TestWaypointModel(unittest.TestCase):
         # and the other way around: model changes show up in the editor
         self.model.setData(idx, "via")
         self.assertEqual(combo.currentText(), "via")
+
+    def test_spopt_applicability(self):
+        """Weight is for demand points, predefined for facilities; the role switches them."""
+        self.model.set_kind(SPOPT)
+        keys = [c.key for c in SPOPT.columns]
+        role, weight, predefined = (
+            self.model.index(0, keys.index(k)) for k in ("role", "weight", "predefined")
+        )
+
+        # a demand point by default
+        self.assertEqual(self.model.data(role), "demand")
+        self.assertEqual(self.model.data(weight), 1.0)
+        self.assertIsNone(self.model.data(predefined, Qt.ItemDataRole.CheckStateRole))
+        self.assertEqual(self.model.flags(predefined), Qt.ItemFlag.ItemIsSelectable)
+
+        self.model.setData(role, "facility")
+        self.assertIsNone(self.model.data(weight))
+        self.assertFalse(self.model.flags(weight) & Qt.ItemFlag.ItemIsEditable)
+        self.assertTrue(self.model.flags(predefined) & Qt.ItemFlag.ItemIsUserCheckable)
+        self.assertEqual(
+            self.model.data(predefined, Qt.ItemDataRole.CheckStateRole), Qt.CheckState.Unchecked
+        )
