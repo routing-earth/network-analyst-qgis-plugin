@@ -1,7 +1,7 @@
 import json
 from collections import defaultdict
 from enum import Enum, unique
-from typing import DefaultDict, Generator, List, Optional, Tuple, Union
+from typing import Any, DefaultDict, Dict, Generator, List, Optional, Tuple, Union
 from urllib.parse import parse_qsl, urlparse
 
 from qgis.core import (
@@ -18,13 +18,12 @@ from qgis.core import (
     QgsSvgMarkerSymbolLayer,
     QgsUnitTypes,
 )
-from qgis.gui import QgisInterface, QgsMapTool, QgsSpinBox
-from qgis.PyQt.QtCore import QPointF, QSize, Qt
+from qgis.gui import QgisInterface, QgsMapTool
+from qgis.PyQt.QtCore import QPointF, QSize
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
     QAction,
     QApplication,
-    QComboBox,
     QDialog,
     QHBoxLayout,
     QHeaderView,
@@ -32,8 +31,7 @@ from qgis.PyQt.QtWidgets import (
     QMenu,
     QSizePolicy,
     QSpacerItem,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -48,29 +46,21 @@ from ...utils.misc_utils import str_is_bool, str_is_float, str_to_bool
 from ...utils.resource_utils import get_icon, get_resource_path
 from ..dlg_from_json import FromValhallaJsonDialog
 from ..dlg_from_osrm_url import FromOsrmUrlDialog
+from .waypoint_model import (  # noqa: F401 - LocationType/PreferredSide re-exported
+    KINDS,
+    ROUTING,
+    Column,
+    ColumnKind,
+    LocationType,
+    PreferredSide,
+    Waypoint,
+    WaypointDelegate,
+    WaypointTableKind,
+    WaypointTableModel,
+)
 
-
-@unique
-class LocationType(str, Enum):
-    BREAK = "break"
-    VIA = "via"
-    THROUGH = "through"
-    BREAK_THROUGH = "break_through"
-
-    @property
-    def idx(self) -> int:
-        return list(type(self)).index(self)
-
-
-@unique
-class PreferredSide(str, Enum):
-    EITHER = "either"
-    SAME = "same"
-    OPPOSITE = "opposite"
-
-    @property
-    def idx(self) -> int:
-        return list(type(self)).index(self)
+# where the points of each table kind are kept in the project
+PROJECT_SCOPE = "valhalla"
 
 
 @unique
@@ -207,71 +197,146 @@ def extract_locations(  # noqa: C901
             yield lat, lon, LocationType.BREAK, PreferredSide.EITHER, radius, extra_col
 
 
-class WaypointsWidget(QWidget):
-    ANN_NAME = "Valhalla Waypoints"
+def _plain(value: Any) -> Any:
+    """An enum's value, anything else as is: str enums don't format to their value."""
+    return value.value if isinstance(value, Enum) else value
 
-    def __init__(
-        self,
-        parent_dlg: QWidget = None,
-        iface: QgisInterface = None,
-        color_markers: bool = True,
-    ):
+
+def _from_field(column: Column, value: Any) -> Any:
+    """A layer attribute converted for ``column``, None for NULL or what doesn't convert."""
+    if value is None or (hasattr(value, "isNull") and value.isNull()):
+        return None
+    try:
+        if column.kind == ColumnKind.BOOL:
+            return float(value) == 1
+        if column.kind == ColumnKind.INT:
+            return int(value)
+        if column.kind == ColumnKind.FLOAT:
+            return float(value)
+        return str(value)
+    except (TypeError, ValueError):
+        return None
+
+
+class WaypointsWidget(QWidget):
+    ANN_NAME = ROUTING.ann_layer_name
+
+    def __init__(self, parent_dlg: QWidget = None, iface: QgisInterface = None):
         """
         Represents the waypoint table widget. Needs to be added to the parent's layout
         widget by the caller.
 
         :param parent_dlg: Parent dialog
         :param iface: The QGIS interface
-        :param color_markers: Whether origin/destination should show colored markers
         """
         super().__init__(parent_dlg)
         self.iface = iface
         self.parent_dlg = parent_dlg
-        self.color_markers = color_markers
 
         self.point_tool = PointTool(self.iface.mapCanvas())
         self.last_maptool: Optional[QgsMapTool] = None
 
+        # every table kind has its own points, its own annotation layer and is kept in the project
+        self.table_models: Dict[str, WaypointTableModel] = {
+            n: WaypointTableModel(k, self) for n, k in KINDS.items()
+        }
+        self.table_model = self.table_models[ROUTING.name]
+        self._ann_ids: Dict[str, Optional[str]] = {name: None for name in KINDS}
+        # the attributes of points added from the canvas, set by the kind's add modes
+        self._add_attrs: Dict[str, Any] = dict()
+        # don't write back to the project while restoring from it
+        self._restoring = False
+
         self.setupUi()
 
-        # keep a reference of the annotation layer and its ID
-        self.points_lyr: Optional[QgsAnnotationLayer] = None
-        self.points_lyr_id: Optional[str] = None
+        for name, model in self.table_models.items():
+            # only the shown model has editors
+            model.rowsInserted.connect(
+                lambda _, first, last, m=model: m is self.table_model
+                and self._open_persistent_editors(first, last)
+            )
+            model.modelReset.connect(
+                lambda m=model: m is self.table_model and self._open_persistent_editors()
+            )
+            for signal in (
+                model.rowsInserted,
+                model.rowsRemoved,
+                model.rowsMoved,
+                model.dataChanged,
+                model.modelReset,
+            ):
+                signal.connect(lambda *_, n=name: self._store(n))
+        self._setup_kind_buttons()
 
-        # always look for an existing annotation layer before creating a new one
+        # always look for existing points in the project before creating new ones; a new
+        # project (cleared) has none, so the tables empty
         self._handle_read_project()
         self.iface.projectRead.connect(self._handle_read_project)
+        QgsProject.instance().cleared.connect(self._handle_read_project)
+
+    def unload(self):
+        """Disconnects from the project, else a reloaded plugin's old widget keeps listening."""
+        for signal in (self.iface.projectRead, QgsProject.instance().cleared):
+            try:
+                signal.disconnect(self._handle_read_project)
+            except TypeError:
+                pass
+
+    @property
+    def points_lyr_id(self) -> Optional[str]:
+        """The shown kind's annotation layer ID."""
+        return self._ann_ids[self.table_model.table_kind.name]
+
+    @property
+    def points_lyr(self) -> Optional[QgsAnnotationLayer]:
+        """The shown kind's annotation layer, if it (still) exists."""
+        return QgsProject.instance().mapLayer(self.points_lyr_id) if self.points_lyr_id else None
+
+    def set_kind(self, kind: WaypointTableKind):
+        """Shows the points of another table kind; the other kind's markers are hidden."""
+        if kind is self.table_model.table_kind:
+            return
+        self._set_layer_visible(self.table_model.table_kind, False)
+        self.table_model = self.table_models[kind.name]
+        self.ui_table.setModel(self.table_model)
+        self._open_persistent_editors()
+        self._setup_kind_buttons()
+        self._set_layer_visible(kind, True)
+
+    @property
+    def waypoints(self) -> List[Waypoint]:
+        return self.table_model.waypoints
+
+    def add_waypoint(self, lon: float, lat: float, row: Optional[int] = None, **attrs) -> int:
+        """Adds a WGS84 point before ``row`` (default: at the end); returns its row."""
+        row = self.table_model.rowCount() if row is None else row
+        self.table_model.insert(row, [Waypoint(lon, lat, {k: _plain(v) for k, v in attrs.items()})])
+        return row
 
     def get_locations(self, router: RouterType) -> List[Union[Tuple[float, float], Valhalla.Waypoint]]:
-        """Convenience method for getting coordinate tuples of all table rows."""
+        """Convenience method for getting coordinate tuples of all routing table rows."""
         locations = list()
-        # for Valhalla we have to build routingpy Valhalla.Waypoint objects
-        if router == RouterType.VALHALLA:
-            for row in range(self.ui_table.rowCount()):
-                kwargs = dict()
-                for k, v in parse_qsl(self.ui_table.item(row, 3).text()):
-                    if v.isnumeric():
-                        kwargs[k] = int(v)
-                    elif str_is_bool(v):
-                        kwargs[k] = str_to_bool(v)
-                    elif str_is_float(v):
-                        kwargs[k] = float(v)
-                    else:  # it's a string
-                        kwargs[k] = v
-                kwargs["type"] = self.ui_table.cellWidget(row, 0).currentText()
-                kwargs["preferred_side"] = self.ui_table.cellWidget(row, 1).currentText()
-                radius = self.ui_table.cellWidget(row, 2).value()
-                if radius > 0:
-                    kwargs["radius"] = radius
-                locations.append(
-                    Valhalla.Waypoint(
-                        [round(c, 6) for c in self.ui_table.item(row, 4).data(Qt.ItemDataRole.UserRole)],
-                        **kwargs,
-                    )
-                )
-        else:
-            for row in range(self.ui_table.rowCount()):
-                locations.append([float(self.ui_table.item(row, x).text()) for x in (1, 0)])
+        for wp in self.table_models[ROUTING.name].waypoints:
+            # for Valhalla we have to build routingpy Valhalla.Waypoint objects
+            if router != RouterType.VALHALLA:
+                locations.append([wp.lon, wp.lat])
+                continue
+
+            kwargs = dict()
+            for k, v in parse_qsl(wp.attrs["extra"]):
+                if v.isnumeric():
+                    kwargs[k] = int(v)
+                elif str_is_bool(v):
+                    kwargs[k] = str_to_bool(v)
+                elif str_is_float(v):
+                    kwargs[k] = float(v)
+                else:  # it's a string
+                    kwargs[k] = v
+            kwargs["type"] = wp.attrs["type"]
+            kwargs["preferred_side"] = wp.attrs["preferred_side"]
+            if wp.attrs["radius"] > 0:
+                kwargs["radius"] = wp.attrs["radius"]
+            locations.append(Valhalla.Waypoint([round(wp.lon, 6), round(wp.lat, 6)], **kwargs))
 
         return locations
 
@@ -281,74 +346,39 @@ class WaypointsWidget(QWidget):
             return {}
 
         params = defaultdict(list)
-        for row in range(self.ui_table.rowCount()):
-            table_params = {
-                k: v
-                for k, v in filter(
-                    lambda x: x[0] == "bearing",
-                    parse_qsl(self.ui_table.item(row, 3).text()),
-                )
-            }
-            params["bearings"].append(
-                [int(x) for x in table_params.get("bearing", "360,180").split(",")]
-            )
-            params["radiuses"].append(
-                self.ui_table.cellWidget(row, 2).value() or "unlimited"
-            )  # avoid radius=0
+        for wp in self.table_models[ROUTING.name].waypoints:
+            bearing = dict(parse_qsl(wp.attrs["extra"])).get("bearing", "360,180")
+            params["bearings"].append([int(x) for x in bearing.split(",")])
+            params["radiuses"].append(wp.attrs["radius"] or "unlimited")  # avoid radius=0
 
         return params
 
-    def _add_row_to_table(
-        self,
-        row: int,
-        lat: float,
-        lon: float,
-        loc_type: str = "break",
-        preferred_side: str = "either",
-        radius: int = 0,
-        extra: str = "",
-    ):
-        """
-        Adds a row to the table's locations
-        """
-        loc_type_w = QComboBox()
-        loc_type_w.addItems([t.value for t in LocationType])
-        loc_type_w.setCurrentIndex(LocationType(loc_type).idx)
-        self.ui_table.setCellWidget(row, 0, loc_type_w)
-
-        preferred_side_w = QComboBox()
-        preferred_side_w.addItems([t.value for t in PreferredSide])
-        preferred_side_w.setCurrentIndex(PreferredSide(preferred_side).idx)
-        self.ui_table.setCellWidget(row, 1, preferred_side_w)
-
-        radius_w = QgsSpinBox()
-        radius_w.setMaximum(100000)
-        radius_w.setValue(radius)
-        self.ui_table.setCellWidget(row, 2, radius_w)
-
-        extra_col = QTableWidgetItem(extra)
-        extra_col.setToolTip(extra)
-        self.ui_table.setItem(row, 3, extra_col)
-
-        # lat/lon as UserRole data
-        lonlat = QTableWidgetItem()
-        lonlat.setData(Qt.ItemDataRole.UserRole, (lon, lat))
-        self.ui_table.setItem(row, 4, lonlat)
+    def _add_extracted_row(self, locations: Generator[Tuple, None, None]):
+        """Appends the rows of extract_locations()"""
+        for lat, lon, loc_type, preferred_side, radius, extra in locations:
+            self.add_waypoint(
+                lon, lat, type=loc_type, preferred_side=preferred_side, radius=int(radius), extra=extra
+            )
 
     def _handle_from_layer(self):
         """Fires a dialog to choose a Point layer and populates the waypoints table with the features."""
-        dlg = FromLayerDialog(self.parent_dlg)
+        dlg = FromLayerDialog(self.parent_dlg, self.table_model.table_kind)
         r = dlg.exec()
 
         if r == QDialog.DialogCode.Rejected or not dlg.layer or not dlg.layer.isValid():
             return
 
+        columns = {c.key: c for c in self.table_model.table_kind.columns}
         feat: QgsFeature
+        waypoints = list()
         for feat in dlg.layer.getFeatures():
             pt: QgsPointXY = point_to_wgs84(feat.geometry().asPoint(), dlg.layer.crs())
-            row_id = self.ui_table.rowCount()
-            self.ui_table.insertRow(row_id)
-            self._add_row_to_table(row_id, pt.y(), pt.x())
+            attrs = dict(dlg.attrs)
+            for key, field_name in dlg.field_map.items():
+                if (value := _from_field(columns[key], feat[field_name])) is not None:
+                    attrs[key] = value
+            waypoints.append(Waypoint(pt.x(), pt.y(), attrs))
+        self.table_model.append(waypoints)
 
         self._reset_annotations()
 
@@ -360,11 +390,8 @@ class WaypointsWidget(QWidget):
             return
 
         try:
-            row_count = self.ui_table.rowCount()
-            for idx, loc_args in enumerate(extract_locations(RouterType.OSRM, url_dlg.ui_url.text())):
-                row_id = idx + row_count
-                self.ui_table.insertRow(row_id)
-                self._add_row_to_table(row_id, *loc_args)
+            # parse everything before touching the table, a bad URL must not leave half of it
+            self._add_extracted_row(extract_locations(RouterType.OSRM, url_dlg.ui_url.text()))
         except ValueError as e:
             self.parent_dlg.status_bar.pushMessage("OSRM Error", str(e), Qgis.MessageLevel.Critical, 8)
 
@@ -387,45 +414,68 @@ class WaypointsWidget(QWidget):
             self.parent_dlg.status_bar.pushMessage("JSON Error", str(e), Qgis.MessageLevel.Critical, 8)
             return
 
-        row_count = self.ui_table.rowCount()
-        for idx, loc_args in enumerate(extract_locations(RouterType.VALHALLA, json_obj)):
-            row_id = idx + row_count
-            self.ui_table.insertRow(row_id)
-            self._add_row_to_table(row_id, *loc_args)
+        self._add_extracted_row(extract_locations(RouterType.VALHALLA, json_obj))
 
         self._reset_annotations()
 
     def _handle_clear_locations(self):
         """Clear the table and the annotations layer"""
-        if QgsProject.instance().mapLayersByName(self.ANN_NAME):
+        if self.points_lyr:
             self.points_lyr.clear()
-        for row_id in reversed(range(self.ui_table.rowCount())):
-            self.ui_table.removeRow(row_id)
+        self.table_model.clear()
+
+    def _store(self, kind_name: str):
+        """Keeps a table kind's points in the project settings as JSON, as they're saved with it."""
+        if self._restoring:
+            return
+        rows = [[wp.lon, wp.lat, wp.attrs] for wp in self.table_models[kind_name].waypoints]
+        QgsProject.instance().writeEntry(PROJECT_SCOPE, f"waypoints/{kind_name}", json.dumps(rows))
 
     def _handle_read_project(self):
-        """If there's an existing annotation layer in the new project, read that instead."""
-        annotation_lyr = QgsProject.instance().mapLayersByName(self.ANN_NAME)
-        if not annotation_lyr:
-            return
+        """Restores every kind's points from the project and finds their annotation layers."""
+        self._restoring = True
+        try:
+            for name, model in self.table_models.items():
+                stored, ok = QgsProject.instance().readEntry(PROJECT_SCOPE, f"waypoints/{name}", "")
+                try:
+                    waypoints = [Waypoint(lon, lat, attrs) for lon, lat, attrs in json.loads(stored)]
+                except (ValueError, TypeError):
+                    # old project from before the points was stored: only routing had any back then
+                    waypoints = self._routing_from_annotations() if name == ROUTING.name else []
+                model.clear()
+                model.append(waypoints)
 
-        # there's already an annotation layer, convert it to the table, after clearing the current contents
-        self.points_lyr: QgsAnnotationLayer = annotation_lyr[0]
-        self.points_lyr_id = self.points_lyr.id()
-        for row_id in reversed(range(self.ui_table.rowCount())):
-            self.ui_table.removeRow(row_id)
-        for _, item in self.points_lyr.items().items():
+                layers = QgsProject.instance().mapLayersByName(KINDS[name].ann_layer_name)
+                self._ann_ids[name] = layers[0].id() if layers else None
+                if layers:
+                    self._attach_node_to_slot(name)
+        finally:
+            self._restoring = False
+
+    def _routing_from_annotations(self) -> List[Waypoint]:
+        """legacy function only used for projects < 6/7.2.0"""
+        layers = QgsProject.instance().mapLayersByName(ROUTING.ann_layer_name)
+        if not layers:
+            return []
+        waypoints = list()
+        for _, item in layers[0].items().items():
             item: QgsAnnotationMarkerItem
             pt = point_to_wgs84(item.geometry(), self.iface.mapCanvas().mapSettings().destinationCrs())
-            row_id = self.ui_table.rowCount()
-            self.ui_table.insertRow(row_id)
-            self._add_row_to_table(row_id, pt.y(), pt.x())
+            waypoints.append(Waypoint(pt.x(), pt.y()))
+        return waypoints
 
-        # attach the node to a slot
-        self._attach_node_to_slot()
+    def _set_layer_visible(self, kind: WaypointTableKind, visible: bool):
+        """Shows/hides a kind's annotation layer, if it exists."""
+        layer_id = self._ann_ids[kind.name]
+        node = QgsProject.instance().layerTreeRoot().findLayer(layer_id) if layer_id else None
+        if node is not None:
+            node.setItemVisibilityChecked(visible)
+        if kind is self.table_model.table_kind:
+            self.ui_btn_show_point_lyr.setChecked(node.isVisible() if node is not None else True)
 
     def _handle_points_btn_toggle(self, checked: bool):
         """hides/shows the waypoint layer in the canvas"""
-        if not QgsProject.instance().mapLayer(self.points_lyr_id):
+        if not self.points_lyr:
             self._reset_annotations()
         QgsProject.instance().layerTreeRoot().findLayer(self.points_lyr.id()).setItemVisibilityChecked(
             checked
@@ -433,54 +483,46 @@ class WaypointsWidget(QWidget):
 
     def _handle_points_layer_toggle(self, node: QgsLayerTreeNode):
         """gets a signal when a layer's visibility as been changed so we switch the button in the UI"""
-        if not node.name() == self.ANN_NAME:
+        if not node.name() == self.table_model.table_kind.ann_layer_name:
             return
 
         self.ui_btn_show_point_lyr.setChecked(node.isVisible())
 
-    def _handle_pt_up(self):
-        """Move a location up in the table."""
-        cur_row = self.ui_table.currentRow()
-        cur_col = self.ui_table.currentColumn()
-        if cur_row > 0:
-            self.ui_table.insertRow(cur_row - 1)
-            for col in range(self.ui_table.columnCount()):
-                if self.ui_table.cellWidget(cur_row + 1, col):
-                    self.ui_table.setCellWidget(
-                        cur_row - 1, col, self.ui_table.cellWidget(cur_row + 1, col)
-                    )
-                else:
-                    self.ui_table.setItem(cur_row - 1, col, self.ui_table.takeItem(cur_row + 1, col))
-                self.ui_table.setCurrentCell(cur_row - 1, cur_col)
-            self.ui_table.removeRow(cur_row + 1)
+    def _move_current(self, delta: int):
+        """Moves the current row up (-1) or down (+1) and keeps it current."""
+        current = self.ui_table.currentIndex()
+        if not current.isValid():
+            return
+        new_row = self.table_model.move(current.row(), delta)
+        self.ui_table.setCurrentIndex(self.table_model.index(new_row, current.column()))
+        self.ui_table.selectRow(new_row)
 
         self._reset_annotations()
+
+    def _handle_pt_up(self):
+        """Move a location up in the table."""
+        self._move_current(-1)
 
     def _handle_pt_down(self):
         """Move a location down in the table."""
-        cur_row = self.ui_table.currentRow()
-        cur_col = self.ui_table.currentColumn()
-        if cur_row < self.ui_table.rowCount() - 1:
-            self.ui_table.insertRow(cur_row + 2)
-            for col in range(self.ui_table.columnCount()):
-                if self.ui_table.cellWidget(cur_row + 1, col):
-                    self.ui_table.setCellWidget(cur_row + 2, col, self.ui_table.cellWidget(cur_row, col))
-                else:
-                    self.ui_table.setItem(cur_row + 2, col, self.ui_table.takeItem(cur_row, col))
-                self.ui_table.setCurrentCell(cur_row + 2, cur_col)
-            self.ui_table.removeRow(cur_row)
+        self._move_current(1)
 
-        self._reset_annotations()
+    def _start_adding(self, attrs: Dict[str, Any]):
+        """Starts adding points from the canvas in an add mode, e.g. as facilities."""
+        self._add_attrs = dict(attrs)
+        self.ui_btn_add_pt.setChecked(True)
+        self._handle_init_maptool()
 
     def _handle_init_maptool(self):
         """Set up the maptool: remember the last one used."""
         if self.ui_btn_add_pt.isChecked():
-            self.last_maptool = self.iface.mapCanvas().mapTool()
+            # switching the add mode while adding: keep the tool we came from
+            if self.iface.mapCanvas().mapTool() is not self.point_tool:
+                self.last_maptool = self.iface.mapCanvas().mapTool()
             self.iface.mapCanvas().setMapTool(self.point_tool)
 
             # add a layer if not there already
-            ann_lyr = QgsProject.instance().mapLayer(self.points_lyr_id)
-            if not ann_lyr:
+            if not self.points_lyr:
                 self._reset_annotations()
             # make sure it's also visible
             QgsProject.instance().layerTreeRoot().findLayer(
@@ -490,25 +532,21 @@ class WaypointsWidget(QWidget):
             self._handle_doubleclick()
 
     def _handle_add_pt(self, pt: QgsPointXY):
-        """Transforms the clicked point and adds it to the table."""
-        # transform the point and insert into the table
-        new_pt = point_to_wgs84(pt, self.iface.mapCanvas().mapSettings().destinationCrs())
+        """Transforms the clicked point and adds it to the table in the current add mode."""
+        self.add_canvas_point(pt, self._add_attrs)
 
-        row_id = (
-            self.ui_table.currentRow() + 1
-            if self.ui_table.currentRow() != -1
-            else self.ui_table.rowCount()
+    def add_canvas_point(self, pt: QgsPointXY, attrs: Dict[str, Any]):
+        """Adds a point in the canvas CRS after the current row, e.g. from the context menu."""
+        new_pt = point_to_wgs84(pt, self.iface.mapCanvas().mapSettings().destinationCrs())
+        current = self.ui_table.currentIndex()
+        row_id = self.add_waypoint(
+            new_pt.x(), new_pt.y(), current.row() + 1 if current.isValid() else None, **attrs
         )
-        self.ui_table.insertRow(row_id)
-        self._add_row_to_table(row_id, new_pt.y(), new_pt.x())
 
         # select the new point in the table so the next clicked point goes to the end of the table
         self.ui_table.clearSelection()
         self.ui_table.selectRow(row_id)
 
-        # define the annotation's symbol
-        self._reset_annotations()
-        self.points_lyr.addItem(self._get_annotation(pt, -1))
         self._reset_annotations()
 
         # if from context menu, the dialog can be hidden but already have waypoints
@@ -526,20 +564,11 @@ class WaypointsWidget(QWidget):
         self.iface.mapCanvas().setMapTool(self.last_maptool)
 
     def _handle_remove_pt(self):
-        """Remove a point from the locations table."""
-        # first collect the row ids
-        max_row = self.ui_table.rowCount()
-        rm_idx = set()
-        for idx in self.ui_table.selectionModel().selectedIndexes():
-            rm_idx.add(idx.row())
-
-        if not len(rm_idx) and max_row > 0:
-            rm_idx.append(max_row - 1)
-
-        # then remove those in reverse order to not mess with table internal ordering
-        rm_idx = sorted(rm_idx, reverse=True)
-        for idx in rm_idx:
-            self.ui_table.removeRow(idx)
+        """Remove the selected points from the locations table, the last one if none is selected."""
+        rows = {idx.row() for idx in self.ui_table.selectionModel().selectedRows()}
+        if not rows and self.table_model.rowCount():
+            rows.add(self.table_model.rowCount() - 1)
+        self.table_model.remove(rows)
 
         self._reset_annotations()
 
@@ -550,51 +579,43 @@ class WaypointsWidget(QWidget):
     def _reset_annotations(self):
         """Helper method to reset the annotation layer based on the current locations table."""
         # first remove the annotation layer
-        if QgsProject.instance().mapLayer(self.points_lyr_id):
+        kind = self.table_model.table_kind
+        if self.points_lyr:
             QgsProject.instance().removeMapLayer(self.points_lyr_id)
 
         # then build it up again with the new points
-        self.points_lyr = QgsAnnotationLayer(
-            self.ANN_NAME,
+        points_lyr = QgsAnnotationLayer(
+            kind.ann_layer_name,
             QgsAnnotationLayer.LayerOptions(QgsProject.instance().transformContext()),
         )
-        self.points_lyr_id = self.points_lyr.id()
+        self._ann_ids[kind.name] = points_lyr.id()
 
-        for row_id in range(self.ui_table.rowCount()):
-            pt = QgsPointXY(*self.ui_table.item(row_id, 4).data(Qt.ItemDataRole.UserRole))
+        waypoints = self.table_model.waypoints
+        for row_id, wp in enumerate(waypoints):
             pt = point_to_wgs84(
-                pt,
+                QgsPointXY(wp.lon, wp.lat),
                 self.iface.mapCanvas().mapSettings().destinationCrs(),
                 QgsCoordinateTransform.TransformDirection.ReverseTransform,
             )
-            self.points_lyr.addItem(self._get_annotation(QgsPoint(pt.x(), pt.y()), row_id))
+            svg = kind.marker(row_id, len(waypoints), wp)
+            points_lyr.addItem(self._get_annotation(QgsPoint(pt.x(), pt.y()), svg))
 
         # add layer to the project and connect the visibility signal
-        QgsProject.instance().addMapLayer(self.points_lyr)
-        self._attach_node_to_slot()
+        QgsProject.instance().addMapLayer(points_lyr)
+        self._attach_node_to_slot(kind.name)
 
-    def _attach_node_to_slot(self):
+    def _attach_node_to_slot(self, kind_name: str):
         """Attaches the node's visibility signal to a slot and sets the checked status of the button"""
         points_node: QgsLayerTreeNode = (
-            QgsProject.instance().layerTreeRoot().findLayer(self.points_lyr_id)
+            QgsProject.instance().layerTreeRoot().findLayer(self._ann_ids[kind_name])
         )
         points_node.visibilityChanged.connect(self._handle_points_layer_toggle)
-        self.ui_btn_show_point_lyr.setChecked(points_node.isVisible())
+        if kind_name == self.table_model.table_kind.name:
+            self.ui_btn_show_point_lyr.setChecked(points_node.isVisible())
 
-    def _get_annotation(self, pt, row_id) -> QgsAnnotationMarkerItem:
+    @staticmethod
+    def _get_annotation(pt: QgsPoint, svg: str) -> QgsAnnotationMarkerItem:
         """Helper to create an annotation object"""
-
-        # only color origin & destination if the parent wants it
-        if not self.color_markers or row_id not in (
-            0,
-            self.ui_table.rowCount() - 1,
-        ):
-            svg = "via.svg"
-        elif row_id == 0:
-            svg = "origin.svg"
-        else:
-            svg = "destination.svg"
-
         symbol = QgsMarkerSymbol()
         symbol.deleteSymbolLayer(0)
         symbol_layer = QgsSvgMarkerSymbolLayer(str(get_resource_path("icons", svg)), 8)
@@ -607,6 +628,39 @@ class WaypointsWidget(QWidget):
         annotation.setSymbol(symbol)
 
         return annotation
+
+    def _open_persistent_editors(self, first: int = 0, last: int = -1):
+        """Keeps the persistent columns' editors open, like cell widgets."""
+        last = self.table_model.rowCount() - 1 if last < 0 else last
+        for col_id, col in enumerate(self.table_model.table_kind.columns):
+            if not col.persistent:
+                continue
+            for row_id in range(first, last + 1):
+                self.ui_table.openPersistentEditor(self.table_model.index(row_id, col_id))
+
+    def _setup_kind_buttons(self):
+        """The add button's modes and the imports of the shown kind."""
+        kind = self.table_model.table_kind
+        self._add_attrs = dict(kind.add_modes[0].attrs) if kind.add_modes else dict()
+        if kind.add_modes:
+            self._add_menu = QMenu(self)
+            for mode in kind.add_modes:
+                action = self._add_menu.addAction(f"Add {mode.plural}")
+                action.triggered.connect(lambda _, a=mode.attrs: self._start_adding(a))
+            self.ui_btn_add_pt.setMenu(self._add_menu)
+            self.ui_btn_add_pt.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+            self.ui_btn_add_pt.setToolTip(
+                f"{BUTTONS[WayPtWidgetElems.ADD_PT][1]}; the arrow picks what to add"
+            )
+        else:
+            self.ui_btn_add_pt.setMenu(None)
+            self.ui_btn_add_pt.setPopupMode(QToolButton.ToolButtonPopupMode.DelayedPopup)
+            self.ui_btn_add_pt.setToolTip(BUTTONS[WayPtWidgetElems.ADD_PT][1])
+
+        for action in self._routing_import_actions:
+            action.setVisible(kind.routing_imports)
+        if not kind.routing_imports:
+            self.ui_btn_from_lyr.setDefaultAction(self._from_layer_action)
 
     def setupUi(self):
         """does the same as the usual setupUi() method from pyuic5"""
@@ -649,6 +703,8 @@ class WaypointsWidget(QWidget):
 
         self.ui_btn_from_lyr.setMenu(dropdown_menu)
         self.ui_btn_from_lyr.setDefaultAction(actions[0])
+        self._from_layer_action = actions[0]
+        self._routing_import_actions = actions[1:]
 
         # add horizontal spacer
         space = QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
@@ -657,36 +713,12 @@ class WaypointsWidget(QWidget):
         # add the buttons to the outer layout
         self.outer_layout.addLayout(self.buttons_layout)
 
-        # add table widget to the outer layout
-        self.ui_table = QTableWidget(0, 5, self)
+        # add the table view to the outer layout
+        self.ui_table = QTableView(self)
+        self.ui_table.setModel(self.table_model)
+        self.ui_table.setItemDelegate(WaypointDelegate(self.ui_table))
         self.ui_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.ui_table.setObjectName(WayPtWidgetElems.TABLE.value)
-
-        type_col = QTableWidgetItem()
-        type_col.setToolTip(
-            "See https://valhalla.github.io/valhalla/api/turn-by-turn/api-reference/#locations"
-        )
-        self.ui_table.setHorizontalHeaderItem(0, type_col)
-
-        type_col = QTableWidgetItem()
-        type_col.setToolTip(
-            "See https://valhalla.github.io/valhalla/api/turn-by-turn/api-reference/#locations"
-        )
-        self.ui_table.setHorizontalHeaderItem(1, type_col)
-
-        radius_col = QTableWidgetItem()
-        radius_col.setToolTip("Radius in meters")
-        self.ui_table.setHorizontalHeaderItem(2, radius_col)
-
-        extra_col = QTableWidgetItem()
-        extra_col.setToolTip(
-            "Extra location properties in URL form, e.g. 'bearing=120,20&hint=348sfj89sa' for OSRM or 'heading=120&preferred_side=same' for Valhalla "
-        )
-        self.ui_table.setHorizontalHeaderItem(3, extra_col)
-        self.ui_table.setHorizontalHeaderLabels(("Type", "Side", "Radius", "Extra", "Coords"))
-
-        # attach lat/lon to a hidden column's data
-        self.ui_table.setColumnHidden(4, True)
 
         # set table dimensions
         self.ui_table.setMinimumHeight(200)

@@ -117,12 +117,6 @@ class RouterWidget(QWidget):
         return self._method
 
     @property
-    def package_path(self) -> str:
-        # only relevant for RouterMethod.LOCAL, which is currently never
-        # registered — kept for dlg_spopt's LOCAL branch
-        return self._package_path
-
-    @property
     def profile(self) -> RouterProfile:
         return self._profile
 

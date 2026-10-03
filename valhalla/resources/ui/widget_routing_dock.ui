@@ -131,62 +131,6 @@ QListWidget::item::selected {
             <property name="currentRow">
              <number>-1</number>
             </property>
-            <item>
-             <property name="text">
-              <string/>
-             </property>
-             <property name="toolTip">
-              <string>Routing</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string/>
-             </property>
-             <property name="toolTip">
-              <string>Optimized Routing</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string/>
-             </property>
-             <property name="toolTip">
-              <string>Isochrones</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string/>
-             </property>
-             <property name="toolTip">
-              <string>OD Matrix</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string/>
-             </property>
-             <property name="toolTip">
-              <string>Map Match</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string/>
-             </property>
-             <property name="toolTip">
-              <string>Expansion</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string/>
-             </property>
-             <property name="toolTip">
-              <string>Elevation</string>
-             </property>
-            </item>
            </widget>
           </item>
              <item>
@@ -675,6 +619,129 @@ QListWidget::item::selected {
                <widget class="QWidget" name="ui_valhalla_elevation_params"/>
                <widget class="QWidget" name="ui_osrm_directions_params"/>
                <widget class="QWidget" name="ui_osrm_matrix_params"/>
+               <widget class="QWidget" name="ui_spopt_params">
+                <layout class="QFormLayout" name="formLayout_spopt">
+                 <property name="leftMargin">
+                  <number>0</number>
+                 </property>
+                 <property name="topMargin">
+                  <number>0</number>
+                 </property>
+                 <property name="rightMargin">
+                  <number>0</number>
+                 </property>
+                 <property name="bottomMargin">
+                  <number>0</number>
+                 </property>
+                 <item row="0" column="0">
+                  <widget class="QLabel" name="ui_spopt_radius_label">
+                   <property name="toolTip">
+                    <string>A demand point is covered by a facility within this radius, in the unit of the metric</string>
+                   </property>
+                   <property name="text">
+                    <string>Service radius</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="0" column="1">
+                  <widget class="QgsDoubleSpinBox" name="ui_spopt_radius">
+                   <property name="toolTip">
+                    <string>A demand point is covered by a facility within this radius, in the unit of the metric</string>
+                   </property>
+                   <property name="decimals">
+                    <number>0</number>
+                   </property>
+                   <property name="maximum">
+                    <double>10000000.000000000000000</double>
+                   </property>
+                   <property name="value">
+                    <double>600.000000000000000</double>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="1" column="0">
+                  <widget class="QLabel" name="ui_spopt_metric_label">
+                   <property name="text">
+                    <string>Metric</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="1" column="1">
+                  <layout class="QHBoxLayout" name="horizontalLayout_spopt_metric">
+                   <item>
+                    <widget class="QRadioButton" name="ui_spopt_duration">
+                     <property name="text">
+                      <string>Time (secs)</string>
+                     </property>
+                     <property name="checked">
+                      <bool>true</bool>
+                     </property>
+                    </widget>
+                   </item>
+                   <item>
+                    <widget class="QRadioButton" name="ui_spopt_distance">
+                     <property name="text">
+                      <string>Distance (m)</string>
+                     </property>
+                    </widget>
+                   </item>
+                   <item>
+                    <spacer name="horizontalSpacer_spopt">
+                     <property name="orientation">
+                      <enum>Qt::Orientation::Horizontal</enum>
+                     </property>
+                     <property name="sizeHint" stdset="0">
+                      <size>
+                       <width>40</width>
+                       <height>20</height>
+                      </size>
+                     </property>
+                    </spacer>
+                   </item>
+                  </layout>
+                 </item>
+                 <item row="2" column="0">
+                  <widget class="QLabel" name="ui_spopt_n_fac_label">
+                   <property name="toolTip">
+                    <string>How many of the candidate facilities to site</string>
+                   </property>
+                   <property name="text">
+                    <string>Facilities</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="2" column="1">
+                  <widget class="QgsSpinBox" name="ui_spopt_n_fac">
+                   <property name="toolTip">
+                    <string>How many of the candidate facilities to site</string>
+                   </property>
+                   <property name="minimum">
+                    <number>1</number>
+                   </property>
+                   <property name="maximum">
+                    <number>100000</number>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="3" column="0">
+                  <widget class="QLabel" name="ui_spopt_lines_label">
+                   <property name="text">
+                    <string>Other</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="3" column="1">
+                  <widget class="QCheckBox" name="ui_spopt_lines">
+                   <property name="toolTip">
+                    <string>Draw the demand points as lines to the facility covering them</string>
+                   </property>
+                   <property name="text">
+                    <string>Draw lines</string>
+                   </property>
+                  </widget>
+                 </item>
+                </layout>
+               </widget>
               </widget>
              </item>
              <item>

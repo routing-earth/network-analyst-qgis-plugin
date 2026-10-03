@@ -1,6 +1,7 @@
 from typing import Optional, Union
 
 from qgis.core import (
+    QgsField,
     QgsFields,
     QgsProcessing,
     QgsProcessingException,
@@ -74,7 +75,8 @@ class MatrixBase(ValhallaBaseAlgorithm):
         layer_2 = self.parameterAsSource(parameters, self.IN_2, context)
         layer_field_name_2 = self.parameterAsString(parameters, self.IN_FIELD_2, context)
 
-        field_list = DEFAULT_LAYER_FIELDS[self.endpoint]
+        # copies: the ID types are set per run and the defaults are shared, also with the dock
+        field_list = [QgsField(f) for f in DEFAULT_LAYER_FIELDS[self.endpoint]]
         if layer_field_name_1:
             layer_1_id_type = layer_1.fields().field(layer_field_name_1).type()
             field_list[2].setType(layer_1_id_type)

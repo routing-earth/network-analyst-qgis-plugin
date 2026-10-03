@@ -11,7 +11,7 @@ QGIS_APP, CANVAS, IFACE, PARENT = get_qgis_app()
 from valhalla.gui.dock_routing import RoutingDockWidget
 
 # from network_analyst.gui.dlg_spopt import SpoptDialog
-from .. import LocalhostDockerTestCase
+from .. import LocalhostDockerTestCase, clear_project_points
 from ..constants import WAYPOINTS_4326, WAYPOINTS_4326_MAP_MATCH
 
 
@@ -25,11 +25,11 @@ class TestHttpRouting(LocalhostDockerTestCase):
         self.dlg.router_widget.ui_cmb_prov.setCurrentIndex(1)
         self.dlg.options_box.setChecked(True)
         for ix, _ in enumerate(WAYPOINTS_4326[:-1]):
-            self.dlg.waypoints_widget.ui_table.insertRow(ix)
-            self.dlg.waypoints_widget._add_row_to_table(ix, *list(reversed(WAYPOINTS_4326[ix])))
+            self.dlg.waypoints_widget.add_waypoint(*WAYPOINTS_4326[ix])
 
     def tearDown(self) -> None:
         QgsProject.instance().removeAllMapLayers()
+        clear_project_points()
 
     def hit_execute(self):
         QTest.mouseClick(self.dlg.execute_btn, Qt.MouseButton.LeftButton)
@@ -37,8 +37,7 @@ class TestHttpRouting(LocalhostDockerTestCase):
 
     def test_valhalla_http_directions_via(self):
         # add the third waypoint to the table
-        self.dlg.waypoints_widget.ui_table.insertRow(2)
-        self.dlg.waypoints_widget._add_row_to_table(2, *list(reversed(WAYPOINTS_4326[2])))
+        self.dlg.waypoints_widget.add_waypoint(*WAYPOINTS_4326[2])
         self.hit_execute()
         self.assertEqual(len(list(QgsProject.instance().mapLayers())), 1)
         layer: QgsVectorLayer = list(QgsProject.instance().mapLayers().values())[0]
@@ -51,11 +50,9 @@ class TestHttpRouting(LocalhostDockerTestCase):
     def test_valhalla_http_optimized_directions(self):
         self.dlg.menu_widget.setCurrentRow(1)
         # add the third waypoint to the table
-        self.dlg.waypoints_widget.ui_table.insertRow(2)
-        self.dlg.waypoints_widget._add_row_to_table(2, *list(reversed(WAYPOINTS_4326[2])))
+        self.dlg.waypoints_widget.add_waypoint(*WAYPOINTS_4326[2])
         # add 4th
-        self.dlg.waypoints_widget.ui_table.insertRow(3)
-        self.dlg.waypoints_widget._add_row_to_table(3, *list(reversed(WAYPOINTS_4326[0])))
+        self.dlg.waypoints_widget.add_waypoint(*WAYPOINTS_4326[0])
         self.hit_execute()
         self.assertEqual(len(list(QgsProject.instance().mapLayers())), 1)
         layer: QgsVectorLayer = list(QgsProject.instance().mapLayers().values())[0]
@@ -94,12 +91,9 @@ class TestHttpRouting(LocalhostDockerTestCase):
         # set to auto
         self.dlg.router_widget.mode_btns.buttons()[2].setChecked(True)
         # add custom map matching waypoints
-        self.dlg.waypoints_widget.ui_table.setRowCount(0)
+        self.dlg.waypoints_widget.table_model.clear()
         for ix, _ in enumerate(WAYPOINTS_4326_MAP_MATCH):
-            self.dlg.waypoints_widget.ui_table.insertRow(ix)
-            self.dlg.waypoints_widget._add_row_to_table(
-                ix, *list(reversed(WAYPOINTS_4326_MAP_MATCH[ix]))
-            )
+            self.dlg.waypoints_widget.add_waypoint(*WAYPOINTS_4326_MAP_MATCH[ix])
         self.hit_execute()
         self.assertEqual(len(list(QgsProject.instance().mapLayers())), 1)
         layer: QgsVectorLayer = list(QgsProject.instance().mapLayers().values())[0]
