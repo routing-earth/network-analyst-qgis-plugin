@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Sequence
 
 from qgis.core import (
     QgsCoordinateReferenceSystem,
@@ -29,6 +29,25 @@ def point_to_wgs84(
         out_point = point_transform
 
     return out_point
+
+
+def encode_polyline6(coords: Sequence[Sequence[float]]) -> str:
+    """
+    Encodes lng/lat coordinates (any further dimensions are ignored) with a precision of 6.
+    """
+    encoded = []
+    prev_lat, prev_lng = 0, 0
+    for lng, lat, *_ in coords:
+        lat, lng = round(lat * 1e6), round(lng * 1e6)
+        for delta in (lat - prev_lat, lng - prev_lng):
+            delta = ~(delta << 1) if delta < 0 else delta << 1
+            while delta >= 0x20:
+                encoded.append(chr((0x20 | (delta & 0x1F)) + 63))
+                delta >>= 5
+            encoded.append(chr(delta + 63))
+        prev_lat, prev_lng = lat, lng
+
+    return "".join(encoded)
 
 
 def decode_polyline(encoded: str) -> List[QgsPointXY]:
