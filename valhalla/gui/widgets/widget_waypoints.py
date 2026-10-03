@@ -645,7 +645,9 @@ class WaypointsWidget(QWidget):
         if kind.add_modes:
             self._add_menu = QMenu(self)
             for mode in kind.add_modes:
-                action = self._add_menu.addAction(f"Add {mode.plural}")
+                # the marker the points will get on the map
+                icon = get_icon(kind.marker(0, 1, Waypoint(0, 0, dict(mode.attrs))))
+                action = self._add_menu.addAction(icon, f"Add {mode.plural}")
                 action.triggered.connect(lambda _, a=mode.attrs: self._start_adding(a))
             self.ui_btn_add_pt.setMenu(self._add_menu)
             self.ui_btn_add_pt.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
