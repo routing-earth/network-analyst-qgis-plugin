@@ -1,9 +1,11 @@
 import unittest
 
 from qgis.core import QgsProject, QgsVectorLayer, QgsWkbTypes
+from qgis.PyQt.QtCore import Qt
 
 from valhalla.core.settings import ValhallaSettings, get_settings_dir
 
+from ... import clear_project_points
 from ...constants import WAYPOINTS_4326
 from ...utilities import get_qgis_app
 
@@ -42,6 +44,7 @@ class TestRoutingDialog(unittest.TestCase):
 
     def tearDown(self) -> None:
         QgsProject.instance().removeAllMapLayers()
+        clear_project_points()
 
     def test_layer_name(self):
         self.assertEqual(
@@ -117,3 +120,31 @@ class TestRoutingDialog(unittest.TestCase):
             msg=f"Extent layer has unexpected Geometry Type {layer.geometryType()}",
         )
         self.assertEqual(layer.featureCount(), 1)
+
+    def test_menu(self):
+        """Items map to pages and table kinds by key, the separator isn't selectable."""
+        from valhalla.core.spopt import SpoptProblem
+        from valhalla.gui.dock_routing import MENU
+        from valhalla.gui.widgets.waypoint_model import ROUTING, SPOPT
+
+        menu = self.dlg.menu_widget
+        self.assertEqual(menu.count(), len(MENU))
+        separator = MENU.index(None)
+        self.assertEqual(menu.item(separator).flags(), Qt.ItemFlag.NoItemFlags)
+
+        for row, entry in enumerate(MENU):
+            if entry is None:
+                continue
+            menu.setCurrentRow(row)
+            self.assertIs(
+                self.dlg.ui_params_stacked.currentWidget(), getattr(self.dlg, entry.stacked_page_name)
+            )
+            self.assertIs(self.dlg.waypoints_widget.model.kind, entry.kind)
+            self.assertTrue(self.dlg.windowTitle().endswith(entry.window_title))
+            if entry.endpoint_key == SpoptProblem.LSCP:
+                self.assertTrue(self.dlg.ui_spopt_n_fac.isHidden())
+            elif entry.endpoint_key == SpoptProblem.MCLP:
+                self.assertFalse(self.dlg.ui_spopt_n_fac.isHidden())
+
+        self.assertEqual({e.kind.name for e in MENU if e}, {ROUTING.name, SPOPT.name})
+        menu.setCurrentRow(0)

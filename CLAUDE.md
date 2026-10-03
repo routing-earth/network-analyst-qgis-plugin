@@ -42,16 +42,15 @@ valhalla/                       # plugin source root (this is what gets shipped)
 │   └── settings.py             # ValhallaSettings (QSettings-backed)
 ├── gui/
 │   ├── dock_routing.py         # RoutingDockWidget — main interactive UI
-│   ├── widgets/                # router widget, waypoints, costing settings; unified graphs
-│   │                           #   table (widget_graph_manager + graph_table_model +
-│   │                           #   graph_ops_re/_local controllers)
-│   ├── compiled/*_ui.py        # GENERATED from resources/ui/*.ui — do not hand-edit
+│   ├── widgets/                # router widget, waypoints (widget_waypoints + waypoint_model),
+│   │                           #   costing settings; unified graphs table (widget_graph_manager +
+│   │                           #   graph_table_model + graph_ops_re/_local controllers)
 │   └── dlg_*.py                # dialogs (settings, providers, server log, …)
 ├── processing/
 │   ├── provider.py             # ValhallaProvider (Processing algorithms registry)
 │   └── routing/, spatial_optimization/, …
 ├── resources/
-│   ├── ui/*.ui                 # Qt Designer XML — source of truth for compiled UIs
+│   ├── ui/*.ui                 # Qt Designer XML, loaded at runtime (uic.loadUiType)
 │   └── icons/
 ├── utils/                      # geom, http, layer, logger, qt, resource helpers
 └── third_party/routingpy/      # vendored routing client lib (do not modify directly)
@@ -64,7 +63,7 @@ tests/
 └── scripts/qgis_test_setup.sh  # CI bootstrapping inside QGIS docker images
 
 scripts/
-├── compile_ui.sh               # pyuic6 over resources/ui/*.ui → gui/compiled/*_ui.py
+├── compile_ui.sh               # DEAD since #67 (UIs load at runtime)
 └── pyqt5_to_pyqt6.py           # QGIS official 3to4.py migration script (one-shot use)
 
 .github/workflows/
@@ -79,13 +78,15 @@ scripts/
 2. `ValhallaPlugin.__init__` instantiates `ValhallaProvider`, which constructs every Processing algorithm class (this is where import-time errors surface — see traceback chain in `processing/provider.py:62`).
 3. `ValhallaPlugin.initGui()` registers the Processing provider, builds the toolbar, and creates the `RoutingDockWidget`.
 
-## UI compilation
+## UI files
 
-`.ui` files (Qt Designer XML) live under `valhalla/resources/ui/`. They're compiled into Python with `pyuic6` via `scripts/compile_ui.sh`, output to `valhalla/gui/compiled/*_ui.py`.
+`.ui` files (Qt Designer XML) live under `valhalla/resources/ui/` and are **loaded at runtime**
+(`uic.loadUiType(str(UI_RESOURCE_PATH / "x.ui"))` at module top, since #67). There is no
+`gui/compiled/` anymore; `scripts/compile_ui.sh` is a dead leftover.
 
-- **Never hand-edit** `valhalla/gui/compiled/*_ui.py` — they're regenerated.
-- After editing any `.ui`, re-run `bash scripts/compile_ui.sh`.
-- Older `.ui` files may use unscoped Qt6 enum syntax (e.g. `QFileDialog::DontResolveSymlinks`); pyuic6 won't fix this for you. Update the `.ui` to use scoped form (`QFileDialog::Option::DontResolveSymlinks`) and recompile.
+- Editing a `.ui` takes effect on the next plugin load, nothing to regenerate.
+- Older `.ui` files may use unscoped Qt6 enum syntax (e.g. `QFileDialog::DontResolveSymlinks`); the
+  PyQt6 loader won't fix this for you. Use the scoped form (`QFileDialog::Option::DontResolveSymlinks`).
 
 ## Test setup
 
@@ -254,16 +255,159 @@ may spawn a python or call pip — `PYTHON_EXE` (the old, macOS-broken constant 
   pip in site-packages but a full `_bundled` (verified: py3.12, `base_prefix=/usr`, empty
   `WHEEL_PKG_DIR`), and `--target` writes to the profile under `~/.var/app/`, not read-only
   `/usr`. Deliberately no `pip.pyz` bootstrap download.
-- `run(argv)` is the only subprocess entry point: argv **list** (the old string + `shlex.split(…,
+- `run_cmd(argv)` is the subprocess entry point: argv **list** (the old string + `shlex.split(…,
   posix=False)` kept the quote chars on Windows), `shell=False`, `CREATE_NO_WINDOW` so Windows
-  doesn't flash consoles, everything wrapped into `PyPiError`.
-- Package data (`PyPiPkg`, `PyPiState`, `PYVALHALLA_PKG`, `RE_UTILS_PKG`, `PYPI_PKGS`) lives here
+  doesn't flash consoles, everything wrapped into `PyPiError`. Its sibling **`run_python(args,
+  stdin, env, is_canceled)`** runs `python_exe() -P -s …` with a polled cancel (kill → returns
+  None) and returns the process whatever its exit code — for our own scripts that answer on
+  stdout (spopt runner). `-P` is load-bearing: a script inside the plugin would otherwise get its
+  own dir on `sys.path[0]`, e.g. `core/http/` shadowing the stdlib `http`.
+- **spopt is the non-abi3 exception** (`SPOPT_PKG`, `_install_spopt`, dir `spopt_root_dir()` =
+  `<profile>/valhalla/spopt`). `pip install --only-binary=:all: --target … spopt "pulp<4"`: ~40
+  packages / ~500 MB (geopandas, scipy, sklearn, …), nearly all per-version `cp3XX` wheels, so the
+  tree only loads under the python that installed it. The install writes that `major.minor` into
+  `.python_version`; `installed_version` reports **None on a mismatch** (→ deps table offers a
+  reinstall), and every install wipes the dir first (pip `--target` doesn't replace). Wheels-only
+  because on a flaky index pip backtracked to a pandas sdist and tried to compile it.
+  **`pulp<4` is load-bearing**: PuLP 4 (Rust rewrite) bundles no solver and breaks released
+  spopt ≤ 0.7 (variables must come from `model.add_variable`); spopt doesn't cap it. Drop the pin
+  when pysal/spopt#527 ships. PuLP 3.3.x bundles CBC for linux x64/arm64, win x64, **macOS x86_64
+  only** (Apple Silicon → Rosetta).
+- Package data (`PyPiPkg`, `PyPiState`, `PYVALHALLA_PKG`, `RE_UTILS_PKG`, `SPOPT_PKG`, `PYPI_PKGS`) lives here
   too — **not** in `global_definitions.py`, which imports the whole GUI costing-widget tree and
   would drag it into every consumer.
+- **The deps table installs in the background** (`dlg_plugin_settings._on_pypi_install`):
+  `QgsTask.fromFunction` (flag `Silent`, i.e. no cancel button: pip can't be interrupted), one
+  install at a time, the other buttons disabled. The button spins QGIS' own `mIconLoading.gif`
+  via a plain `QMovie` — `QgsAnimatedIcon` only starts through `connectFrameChanged(receiver,
+  SLOT-string)`, which is useless from Python. `install()` is thread-safe (subprocess +
+  `QgsNetworkAccessManager.blockingGet`), keep it free of GUI calls.
 - Import direction is one-way: `core/pypi.py` → `utils/resource_utils.py` (for
   `check_valhalla_installation`, since the pyvalhalla version is read off `valhalla_service
   --version` in whatever `get_binary_dir()` points at — deliberately, so a custom binary dir
   reports its own build). Never the reverse.
+
+## Spatial optimization (spopt) — port in progress
+
+Facility location on Valhalla cost matrices via [pysal/spopt](https://github.com/pysal/spopt),
+re-done from the old gis-ops Network Analyst plugin (not a verbatim port). Staged PRs:
+① deps install (**done**, see Dependencies) → ② out-of-process runner + client (**done**) → ③ LSCP
+Processing algo (**done**) → ④ MCLP (**done**) → ⑤ **dock integration** (below the existing endpoints,
+visually separated; NOT a separate dialog): ⑤a outputs carry input attributes (**done**), ⑤b
+model/view waypoint table (**done**), ⑤c spopt table kind + dock menu (**done**), ⑤d running
+spopt from the dock (**done**, `gui/spopt_run.py`, built on `qgis-v3` first).
+`resources/ui/dlg_spopt.ui` is only kept as the 2021 layout reference.
+p-center/p-median are deferred: solves take minutes (200×40: CBC 344 s / 568 s) and need real
+cancel UX.
+
+Decisions behind the design:
+- **Subprocess, never in-process**, although spopt *could* be imported (no `valhalla` shadowing):
+  its tree bundles its own PROJ/GEOS/GDAL (pyproj/shapely/pyogrio `.libs`) next to QGIS' own,
+  clashes with the host numpy already in `sys.modules`, and a solve can't be killed in-process.
+  QGIS keeps matrix + geometry joins; only numbers cross the boundary.
+- `core/spopt/__init__.py` = the client (`solve(SpoptProblem, cost_matrix, …, is_canceled)` →
+  `fac2cli` or None if canceled, raises `SpoptError` with the runner's stderr as `.detail`).
+  `core/spopt/runner.py` = standalone script (**no plugin imports**) that also **owns the
+  protocol**: `SpoptProblem`, `SolveRequest`/`SolveResponse` dataclasses, JSON via `asdict` /
+  `Cls(**json)` so an unknown or missing key is a loud `TypeError`, never silently ignored. The
+  client imports these types in-process, so the runner may import **only stdlib at module
+  level** (numpy/pulp/spopt go inside `solve()`). stdout is the result channel (redirected to
+  stderr during the solve), exit 0/1. Child env: `PYTHONPATH` = **only** the spopt tree, never
+  the host's. Matrix is clients (rows) × facilities (cols).
+- `fac2cli[j]` = the clients within the radius of facility j, **`None` if j wasn't selected**.
+  A selected facility can have `[]`: MCLP sites exactly p facilities and a predefined one is
+  selected wherever it is — with a plain `[]` for "unselected" those silently vanished from the
+  output. A client can appear under several facilities (coverage semantics). Coverage is purely
+  geometric (`model.aij`), not spopt's `cli_vars`, which leave a zero-weight client "uncovered".
+- spopt reads solutions with `var.value() > 0`; with non-CBC solvers (HiGHS) near-zero noise
+  made MCLP report 10 of p=5 facilities. The runner calls `model.problem.solve()` directly
+  (bypassing spopt's `solve()`/result arrays) and thresholds (`> 0.5`) itself.
+- **Processing** (`processing/spatial_optimization/`, group "Spatial Optimization", ids
+  `valhalla:<problem>`): `SpoptBaseAlgorithm` takes a **matrix layer** (a matrix algo's output:
+  facilities = `source`, demand = `target`) — deliberately not computing the matrix itself, so it
+  composes in models; the dock chains matrix → spopt. It reads the matrix in **one pass** (the
+  2021 code did one `QgsExpression` query per target), NULL/missing cost = `inf` (never covered),
+  IDs in order of appearance. The facility & demand layers are **required** (a matrix-only
+  mode existed briefly; it only bought `NoGeometry` branches) and join geometries back, matched
+  by the ID field or **feature id** — the same fallback `matrix_base` uses. The matrix doesn't
+  record which one it was built with, so **the caller must pass the same ID choice as for the
+  matrix**: a matrix ID missing from the layer is an error, but if both key spaces overlap
+  (field values 1..N vs feature ids 1..N in another order) a wrong choice **mis-joins silently**
+  (reproduced). The dock must always hand the same field to both steps. Ambiguity is an error,
+  never last-one-wins: a repeated (source, target) pair in the matrix, or a matrix ID matching
+  several layer features (non-unique ID field). Lines transform the facility
+  end into the demand CRS. Subclasses set `PROBLEM` + `init_problem_params`/`get_problem_kwargs`;
+  Outputs = the **input attributes** + the result fields (`demand_count`; `facility_id` + cost).
+  **Result fields always keep their names**; a clashing input field is renamed (`_2`, `_3`, …,
+  case-insensitive, never onto another input field's name) — deliberately the opposite of
+  `QgsProcessingUtils.combineFields`, because feeding a previous result back in would otherwise
+  leave `facility_id`/`duration` holding the old run's values. A `fid` attribute is not copied
+  (demand rows repeat → GeoPackage unique-constraint failure).
+  `coverage_mixin.py:CoverageMixin` = service radius + predefined field (LSCP, MCLP). MCLP adds
+  the number of facilities and an optional demand weight field; its demand output only holds
+  the **covered** demand points.
+- **Dock run** (`gui/spopt_run.py`): Execute requests the matrix **synchronously** through the
+  dock's `ResultsFactory` (like every other endpoint), then `SpoptRun` runs the Processing algo in
+  a `QgsProcessingAlgRunnerTask` (task manager → cancelable; one run at a time,
+  `dock.spopt_run`). The table's points become two WGS84 memory layers whose `id` field is the
+  point's **index among facilities / demand points**, which is also the matrix result's
+  source/target — so the ID choice can't diverge between the two steps. Layers are passed as
+  **objects**, not IDs: the task runs in a thread-local context that can't see the main
+  context's temporary layer store. Results come back via `context.takeResultLayer`.
+- `DEFAULT_LAYER_FIELDS` (`global_definitions.py`) holds **shared `QgsField` objects**, also used
+  by the dock: copy before `setType()`/renaming. `matrix_base` used to set the ID types on them
+  in place, so one string-ID run turned every later matrix' `source`/`target` into strings.
+- Tests: `tests/test_localhost_plugin/test_utils/test_spopt.py` (real subprocess),
+  `…/test_gui/test_spopt_run.py` (the dock's task, static matrix re-indexed 0-based) and
+  `…/test_processing/test_{lscp,mclp}.py` on `spopt_base.SpoptProcessingBase` (static
+  `tests/data/matrix.geojson`, **no valhalla needed**); all install spopt into the profile on
+  first run (~660 MB).
+- **Test-harness gotcha**: reading *any* OGR layer under `get_qgis_app()` crashes the process
+  at exit (`std::bad_alloc` after the atexit `exitQgis()`; QGIS 4.2.1 / GDAL 3.13.3 — a bare
+  `QgsApplication` exits fine). Tests load the GeoJSON fixtures into **memory layers** with stdlib
+  json (`spopt_base.load_geojson`) instead.
+
+## Waypoint table: one model, a column schema per kind (`gui/widgets/waypoint_model.py`)
+
+The dock's waypoint table is model/view, not `QTableWidget` + cell widgets:
+- `Waypoint(lon, lat, attrs)` rows (WGS84) in a `WaypointModel(QAbstractTableModel)`; the
+  columns come from a **`TableKind`** (`Column(key, header, kind: CHOICE|INT|FLOAT|TEXT|BOOL,
+  default, choices, persistent)` + annotation layer name + `marker(row, n, wp) -> svg`).
+  `ROUTING` is the Valhalla locations schema (type/side/radius/extra). New table flavours
+  (spopt, VRP) are **just another `TableKind`** — model, delegate and widget stay generic.
+- Rows keep attributes the current schema doesn't show (`set_kind` re-defaults, never drops).
+- Kinds: `ROUTING` and `SPOPT` (role facility/demand, name, weight, predefined). A `Column` can
+  have `applies(attrs)`: weight only for demand, predefined only for facilities — elsewhere the
+  cell is blank and read-only, and `setData` refreshes the whole row since the role decides it.
+  `TableKind` also declares `add_modes` (`AddMode(name, plural, attrs)`: the add button becomes
+  a menu, the canvas context menu gets one entry each), `layer_fields` (the From-layer dialog
+  maps layer fields to columns + asks the mode), `routing_imports` (Valhalla JSON/OSRM URL).
+- **Separate points per kind**: `WaypointsWidget.models[kind]` + one annotation layer each;
+  `set_kind` swaps the view's model and shows only that kind's markers. Routing requests
+  always read `models["routing"]`, whatever is shown.
+- **Points live in the project**: every model change writes
+  `QgsProject.writeEntry("valhalla", "waypoints/<kind>", json)`; `projectRead` and `cleared`
+  (new project → empty tables) restore. Annotation layers are only visual. Fallback for
+  older projects: routing points from the "Valhalla Waypoints" markers (their order is lost —
+  an annotation layer keys items by UUID). Tests: `tests.clear_project_points()` in setup/
+  tearDown, or a fresh dock restores earlier tests' points.
+- `WaypointDelegate` builds editors per column kind; `persistent=True` columns keep an editor
+  open (the old cell-widget look) — it commits on every change since it never closes. A
+  persistent editor is a widget per cell: don't use it for big tables.
+- Code and tests go through `waypoints_widget.add_waypoint(lon, lat, **attrs)`,
+  `.waypoints`, `.model` — **no column indices** (the old code hardcoded 0–4 everywhere).
+- `tests/…/test_waypoint_model.py` runs Qt's `QAbstractItemModelTester` (Warning mode, failures
+  collected via `qInstallMessageHandler` — Fatal mode just core-dumps the test process).
+
+## Dock menu (`gui/dock_routing.py:MENU`)
+
+The sidebar is built from **one table**, `MENU`: `MenuEntry(key, title, tooltip, icon, page,
+kind)`, `None` = separator (a non-selectable thin-line item). Each item stores its **index into
+MENU** in `UserRole`; title, stacked page (by objectName, `setCurrentWidget`), waypoint table
+kind and Execute all resolve through it — never by row position (the old
+`list(MENU_TABS)[currentRow()]` + if-chain broke with the separator). The `.ui` has no menu
+items anymore. The sidebar is icon-only (50 px, names in tooltips), and its stylesheet pads
+items by 6 px: a separator item must stay ≥ 14 px tall or its line widget gets 0 px.
 
 ## Running the valhalla binaries (all three platforms since pyvalhalla 3.9.0)
 
@@ -295,7 +439,7 @@ Two Windows-only facts make this work, both hidden behind helpers in `utils/reso
 
 These will keep biting — check first when something breaks after touching v4 code:
 
-1. **Enum scoping.** PyQt6 requires fully scoped enum access. `Qt.LeftButton` → `Qt.MouseButton.LeftButton`; `QDialogButtonBox.Ok` → `QDialogButtonBox.StandardButton.Ok`; `QDir.Dirs` → `QDir.Filter.Dirs`. The compiled UI files were regenerated with `pyuic6` to handle this for generated code — but hand-written code (especially `tests/`) still needs manual fixes.
+1. **Enum scoping.** PyQt6 requires fully scoped enum access. `Qt.LeftButton` → `Qt.MouseButton.LeftButton`; `QDialogButtonBox.Ok` → `QDialogButtonBox.StandardButton.Ok`; `QDir.Dirs` → `QDir.Filter.Dirs`. The `.ui` files need the scoped form too (they're loaded at runtime, see "UI files"), and so does hand-written code (especially `tests/`).
 2. **Class relocations.** `QFileSystemModel` moved from `QtWidgets` to `QtGui`. `QAction` moved from `QtWidgets` to `QtGui`. `QRegExp` removed → use `QRegularExpression`.
 3. **`QSortFilterProxyModel` + `QFileSystemModel` is brittle in Qt6.** `proxy.mapFromSource(idx)` walks the source index's parent chain; `QFileSystemModel` only fetches children of `setRootPath`, never the ancestor chain. Result: `mapFromSource` returns invalid even when `model.index(path)` is valid. Fix used in this repo: drop the proxy, use `QFileSystemWatcher` + explicit `iterdir()`-based models (see `widget_router.py` and `graph_table_model.py`).
 4. **Stale `.pyc`.** When refactoring imports, clear `__pycache__/` — Python's mtime-based invalidation can lag and produce confusing tracebacks referring to old import statements.
@@ -303,7 +447,7 @@ These will keep biting — check first when something breaks after touching v4 c
 ## Coding conventions
 
 - Black, line length 105. isort with black profile. `pyproject.toml` excludes `compiled/`, `third_party/`, and a few entry-point files.
-- Tests under `tests/test_localhost_docker/test_processing/test_spatial_optimization/UNUSED_*.py` are deliberately skipped (filename prefix).
+- Tests named `UNUSED_*.py` (e.g. the OSRM ones under `test_processing/test_routing/`) are deliberately skipped (filename prefix).
 - Don't modify `valhalla/third_party/routingpy/` — it's vendored. The plugin overrides what it needs via subclassing in `valhalla/core/`.
 
 ---
@@ -332,9 +476,6 @@ Don't pad with trivia (file-by-file changelogs, one-off bugs we already fixed). 
 ## Quick commands
 
 ```shell
-# Recompile UI after .ui edit
-bash scripts/compile_ui.sh
-
 # Clear stale bytecode (do this any time you refactor imports)
 find tests valhalla -type d -name __pycache__ -exec rm -rf {} +
 
