@@ -276,6 +276,12 @@ may spawn a python or call pip — `PYTHON_EXE` (the old, macOS-broken constant 
 - Package data (`PyPiPkg`, `PyPiState`, `PYVALHALLA_PKG`, `RE_UTILS_PKG`, `SPOPT_PKG`, `PYPI_PKGS`) lives here
   too — **not** in `global_definitions.py`, which imports the whole GUI costing-widget tree and
   would drag it into every consumer.
+- **The deps table installs in the background** (`dlg_plugin_settings._on_pypi_install`):
+  `QgsTask.fromFunction` (flag `Silent`, i.e. no cancel button: pip can't be interrupted), one
+  install at a time, the other buttons disabled. The button spins QGIS' own `mIconLoading.gif`
+  via a plain `QMovie` — `QgsAnimatedIcon` only starts through `connectFrameChanged(receiver,
+  SLOT-string)`, which is useless from Python. `install()` is thread-safe (subprocess +
+  `QgsNetworkAccessManager.blockingGet`), keep it free of GUI calls.
 - Import direction is one-way: `core/pypi.py` → `utils/resource_utils.py` (for
   `check_valhalla_installation`, since the pyvalhalla version is read off `valhalla_service
   --version` in whatever `get_binary_dir()` points at — deliberately, so a custom binary dir

@@ -1,15 +1,15 @@
 from functools import partial
 from pathlib import Path
 from traceback import format_exception
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from packaging.version import parse as Version
-from qgis.core import Qgis
+from qgis.core import Qgis, QgsApplication, QgsTask
 from qgis.gui import QgisInterface, QgsCollapsibleGroupBox, QgsFileWidget
 from qgis.PyQt import uic
 from qgis.PyQt.QtCore import QRect, QSize, Qt
+from qgis.PyQt.QtGui import QIcon, QMovie
 from qgis.PyQt.QtWidgets import (
-    QApplication,
     QDialog,
     QFileDialog,
     QLabel,
@@ -64,6 +64,12 @@ class PluginSettingsDialog(QDialog, GENERATED_FORM_CLASS):
         self.ui_binary_path.setOptions(_opts)
         # the status bar inserts itself at layout index 0, build it before the table
         self.status_bar = add_msg_bar(self.main_layout)
+        # the running install (one at a time) & its package, the buttons by package name
+        self._install_task: Optional[QgsTask] = None
+        self._installing: Optional[PyPiPkg] = None
+        self._install_btns: Dict[str, QToolButton] = dict()
+        # QGIS' own loading spinner, on the installing package's button
+        self._spinner = QMovie(QgsApplication.iconPath("/mIconLoading.gif"), parent=self)
         self.setupDepsTable()
 
         # the unified graphs section (local + routing-earth.com), fully built in code
@@ -117,6 +123,7 @@ class PluginSettingsDialog(QDialog, GENERATED_FORM_CLASS):
         up online is shown as "unknown", not as a traceback in the user's face.
         """
         self.ui_deps_table.clear()
+        self._install_btns.clear()
         self.ui_deps_table.setRowCount(len(PYPI_PKGS))
         self.ui_deps_table.setHorizontalHeaderLabels(["Package", "Installed", "Available", "Action"])
         unavailable_pkgs = []
@@ -166,6 +173,11 @@ class PluginSettingsDialog(QDialog, GENERATED_FORM_CLASS):
             f = partial(self._on_pypi_install, pkg, installed_state)
             btn.clicked.connect(f)
             self.ui_deps_table.setCellWidget(row_id, 3, btn)
+            self._install_btns[pkg.pypi_name] = btn
+
+        # rebuilt while an install runs, e.g. the dialog was reopened
+        if self._installing is not None:
+            self._show_installing(self._installing)
 
         self.ui_deps_table.resizeColumnToContents(3)
 
@@ -190,20 +202,48 @@ class PluginSettingsDialog(QDialog, GENERATED_FORM_CLASS):
             return None, None, PyPiState.NOT_INSTALLED
 
     def _on_pypi_install(self, pkg: PyPiPkg, installed_state: PyPiState):
-        """Install/upgrade one of the PYPI_PKGS."""
-        try:
-            install(pkg, installed_state)
-        except PyPiError as e:
-            self._log_failure(f"Couldn't install {pkg.pypi_name}: {e}", e, e.detail)
+        """Install/upgrade one of the PYPI_PKGS in the background, one at a time."""
+        if self._installing is not None:
             return
-        except Exception as e:  # noqa: BLE001 - never let a traceback dialog pop
-            self._log_failure(f"Couldn't install {pkg.pypi_name}", e)
-            return
+        task = QgsTask.fromFunction(
+            f"Installing {pkg.pypi_name}",
+            lambda _task: install(pkg, installed_state),
+            on_finished=partial(self._on_pypi_installed, pkg),
+            # the install can't be interrupted, so no cancel button in the task manager
+            flags=QgsTask.Flag.Silent,
+        )
+        self._install_task, self._installing = task, pkg
+        self._show_installing(pkg)
+        QgsApplication.taskManager().addTask(task)
 
-        self.status_bar.pushMessage(f"Successfully installed/upgraded package: {pkg.pypi_name}")
-        # update the table with the new info
-        self.setupDepsTable()
-        QApplication.processEvents()
+    def _on_pypi_installed(self, pkg: PyPiPkg, exception: Optional[Exception], _=None):
+        self._install_task, self._installing = None, None
+        self._spinner.stop()
+        self._spinner.frameChanged.disconnect()
+        self.setupDepsTable()  # the new versions, and the buttons are back
+
+        if isinstance(exception, PyPiError):
+            self._log_failure(f"Couldn't install {pkg.pypi_name}: {exception}", exception, exception.detail)
+        elif exception is not None:
+            self._log_failure(f"Couldn't install {pkg.pypi_name}", exception)
+        else:
+            self.status_bar.pushMessage(f"Successfully installed/upgraded package: {pkg.pypi_name}")
+
+    def _show_installing(self, pkg: PyPiPkg):
+        """Spins the installing package's button, the others are disabled meanwhile."""
+        for btn in self._install_btns.values():
+            btn.setEnabled(False)
+        btn = self._install_btns[pkg.pypi_name]
+        btn.setToolTip(f"Installing {pkg.pypi_name}...")
+        try:
+            self._spinner.frameChanged.disconnect()
+        except TypeError:  # nothing connected yet
+            pass
+        # a disabled button would gray the spinner out, so it only ignores clicks
+        btn.setEnabled(True)
+        btn.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._spinner.frameChanged.connect(lambda _: btn.setIcon(QIcon(self._spinner.currentPixmap())))
+        self._spinner.start()
 
     def _log_failure(self, message: str, exc: Exception, detail: str = ""):
         """One line in the message bar, everything we know in the log panel."""
