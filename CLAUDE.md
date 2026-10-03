@@ -289,8 +289,7 @@ re-done from the old gis-ops Network Analyst plugin (not a verbatim port). Stage
 Processing algo (**done**) → ④ MCLP (**done**) → ⑤ **dock integration** (below the existing endpoints,
 visually separated; NOT a separate dialog): ⑤a outputs carry input attributes (**done**), ⑤b
 model/view waypoint table (**done**), ⑤c spopt table kind + dock menu (**done**), ⑤d running
-spopt from the dock (next: matrix via the dock's factory → `QgsProcessingAlgRunnerTask` with
-the algorithms; Execute on an spopt entry currently just says "not yet").
+spopt from the dock (**done**, `gui/spopt_run.py`, built on `qgis-v3` first).
 `resources/ui/dlg_spopt.ui` is only kept as the 2021 layout reference.
 p-center/p-median are deferred: solves take minutes (200×40: CBC 344 s / 568 s) and need real
 cancel UX.
@@ -341,10 +340,19 @@ Decisions behind the design:
   `coverage_mixin.py:CoverageMixin` = service radius + predefined field (LSCP, MCLP). MCLP adds
   the number of facilities and an optional demand weight field; its demand output only holds
   the **covered** demand points.
+- **Dock run** (`gui/spopt_run.py`): Execute requests the matrix **synchronously** through the
+  dock's `ResultsFactory` (like every other endpoint), then `SpoptRun` runs the Processing algo in
+  a `QgsProcessingAlgRunnerTask` (task manager → cancelable; one run at a time,
+  `dock.spopt_run`). The table's points become two WGS84 memory layers whose `id` field is the
+  point's **index among facilities / demand points**, which is also the matrix result's
+  source/target — so the ID choice can't diverge between the two steps. Layers are passed as
+  **objects**, not IDs: the task runs in a thread-local context that can't see the main
+  context's temporary layer store. Results come back via `context.takeResultLayer`.
 - `DEFAULT_LAYER_FIELDS` (`global_definitions.py`) holds **shared `QgsField` objects**, also used
   by the dock: copy before `setType()`/renaming. `matrix_base` used to set the ID types on them
   in place, so one string-ID run turned every later matrix' `source`/`target` into strings.
-- Tests: `tests/test_localhost_plugin/test_utils/test_spopt.py` (real subprocess) and
+- Tests: `tests/test_localhost_plugin/test_utils/test_spopt.py` (real subprocess),
+  `…/test_gui/test_spopt_run.py` (the dock's task, static matrix re-indexed 0-based) and
   `…/test_processing/test_{lscp,mclp}.py` on `spopt_base.SpoptProcessingBase` (static
   `tests/data/matrix.geojson`, **no valhalla needed**); all install spopt into the profile on
   first run (~660 MB).

@@ -33,7 +33,7 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from .. import PLUGIN_NAME
-from ..core import graph_registry
+from ..core import graph_registry, pypi
 from ..core.results_factory import ResultsFactory
 from ..core.settings import (
     DEFAULT_PROVIDERS,
@@ -60,6 +60,7 @@ from ..utils.resource_utils import (
 from . import UI_RESOURCE_PATH
 from .dlg_about import AboutDialog
 from .gui_utils import add_msg_bar
+from .spopt_run import SpoptRun, matrix_layer, split_waypoints
 from .widgets.waypoint_model import ROUTING, SPOPT, Waypoint, WaypointTableKind
 from .widgets.widget_router import PROFILE_TO_UI, RouterWidget
 from .widgets.widget_routing_params import RoutingParamsWidget
@@ -161,6 +162,8 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         # add a status bar
         self.status_bar = add_msg_bar(self.verticalWrapper)
         self.endpoint = ""
+        # the spatial optimization running in the background, one at a time
+        self.spopt_run: Optional[SpoptRun] = None
 
         # make sure we have some default settings:
         # - at least one remote HTTP API URL and localhost
@@ -415,10 +418,27 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         entry = self._menu_entry()
         if entry is None:
             return
-        if isinstance(entry.endpoint_key, SpoptProblem):
-            self.status_bar.pushInfo("Not yet", "Running spatial optimization from here comes next")
-            return
-        self.endpoint = entry.endpoint_key
+
+        try:
+            if isinstance(entry.endpoint_key, SpoptProblem):
+                self._execute_spopt(entry.endpoint_key)
+            else:
+                self._execute_routing(entry.endpoint_key)
+        except routingpy.exceptions.RouterError as e:  # HTTP error
+            msg = str(e.message.get("error") or e.message) if isinstance(e.message, dict) else e.message
+            self.status_bar.pushMessage(
+                f"HTTP Error {e.status}",
+                msg,
+                Qgis.MessageLevel.Critical,
+                8,
+            )
+        except routingpy.exceptions.JSONParseError as e:
+            self.status_bar.pushMessage("Invalid response", str(e), Qgis.MessageLevel.Critical, 8)
+        except (RuntimeError, ValhallaError) as e:  # Bindings & factory error
+            self.status_bar.pushMessage("Error", str(e), Qgis.MessageLevel.Critical, 8)
+
+    def _execute_routing(self, endpoint: RouterEndpoint):
+        self.endpoint = endpoint
         params = self._get_params(self.endpoint)
         self.factory.profile = self.router_widget.profile  # update profile
 
@@ -437,25 +457,64 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         locations = self.waypoints_widget.get_locations(self.router_widget.router)
         params.update(self.waypoints_widget.get_extra_params(self.router_widget.router))
 
-        try:
-            lyr = self._get_output_layer(self.endpoint, locations, params)
-        except routingpy.exceptions.RouterError as e:  # HTTP error
-            msg = str(e.message.get("error") or e.message) if isinstance(e.message, dict) else e.message
-            self.status_bar.pushMessage(
-                f"HTTP Error {e.status}",
-                msg,
-                Qgis.MessageLevel.Critical,
-                8,
+        lyr = self._get_output_layer(self.endpoint, locations, params)
+        QgsProject.instance().addMapLayer(lyr)
+
+    def _execute_spopt(self, problem: SpoptProblem):
+        """Requests the matrix right away, the solve runs in the background."""
+        if self.spopt_run is not None:
+            self.status_bar.pushInfo("Busy", "A spatial optimization is still running")
+            return
+        if not pypi.is_installed(pypi.SPOPT_PKG):
+            self.status_bar.pushWarning(
+                "Missing dependency", "Install spopt in the plugin settings' dependencies first"
             )
             return
-        except routingpy.exceptions.JSONParseError as e:
-            self.status_bar.pushMessage("Invalid response", str(e), Qgis.MessageLevel.Critical, 8)
+
+        facilities, demand = split_waypoints(self.waypoints_widget.table_models[SPOPT.name].waypoints)
+        if not facilities or not demand:
+            self.status_bar.pushWarning(
+                "Missing points", "Add at least one facility and one demand point"
+            )
             return
-        except (RuntimeError, ValhallaError) as e:  # Bindings & factory error
-            self.status_bar.pushMessage("Error", str(e), Qgis.MessageLevel.Critical, 8)
+        n_facilities = self.ui_spopt_n_fac.value()
+        if problem == SpoptProblem.MCLP and n_facilities > len(facilities):
+            self.status_bar.pushWarning(
+                "Too few facilities",
+                f"Can't site {n_facilities} facilities, there are only {len(facilities)} candidates",
+            )
             return
 
-        QgsProject.instance().addMapLayer(lyr)
+        self.factory.profile = self.router_widget.profile
+        matrix = matrix_layer(self.factory, facilities, demand, self._get_params(RouterEndpoint.MATRIX))
+
+        self.spopt_run = SpoptRun(
+            problem,
+            facilities,
+            demand,
+            matrix,
+            metric_idx=0 if self.ui_spopt_duration.isChecked() else 1,
+            service_radius=self.ui_spopt_radius.value(),
+            n_facilities=n_facilities,
+            draw_lines=self.ui_spopt_lines.isChecked(),
+            on_done=self._on_spopt_done,
+        )
+        self.spopt_run.start()
+        self.status_bar.pushInfo(
+            "Solving", f"{problem.value.upper()} runs in the background, see the task manager"
+        )
+
+    def _on_spopt_done(self, layers: List[QgsMapLayer], error: Optional[str]):
+        problem = self.spopt_run.problem
+        self.spopt_run = None
+        if error:
+            self.status_bar.pushCritical(f"{problem.value.upper()} failed", error)
+        elif not layers:
+            self.status_bar.pushInfo("Canceled", f"{problem.value.upper()} was canceled")
+        else:
+            self.status_bar.clearWidgets()
+        for layer in layers:
+            QgsProject.instance().addMapLayer(layer)
 
     def _on_settings_change(self, new_text, widget: Optional[QWidget] = ""):
         attr = widget.objectName() if widget else self.sender().objectName()
@@ -650,6 +709,9 @@ class RoutingDockWidget(QgsDockWidget, GENERATED_FORM_CLASS):
         graph_widget = getattr(getattr(self.router_widget, "settings_dlg", None), "graph_widget", None)
         if graph_widget is not None:
             graph_widget.shutdown()
+
+        if self.spopt_run is not None:
+            self.spopt_run.cancel()
 
         self.waypoints_widget.unload()
 
