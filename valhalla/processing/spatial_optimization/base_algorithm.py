@@ -1,486 +1,371 @@
+import math
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Tuple
 
 from qgis.core import (
-    QgsExpression,
+    QgsCoordinateTransform,
     QgsFeature,
-    QgsFeatureRequest,
+    QgsFeatureSource,
     QgsField,
     QgsFields,
     QgsGeometry,
-    QgsPoint,
     QgsProcessing,
     QgsProcessingAlgorithm,
+    QgsProcessingContext,
     QgsProcessingException,
-    QgsProcessingFeatureSource,
+    QgsProcessingFeedback,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterDefinition,
     QgsProcessingParameterEnum,
     QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterField,
-    QgsProcessingParameterNumber,
     QgsWkbTypes,
 )
 from qgis.PyQt.QtCore import QCoreApplication, QVariant
 from qgis.PyQt.QtGui import QIcon
 
-from ...global_definitions import FieldNames, SpOptTypes
-from ...processing.processing_definitions import HELP_DIR
-from ...utils.geom_utils import WGS84
+from ...core import spopt
+from ...core.spopt import SpoptProblem
+from ...exceptions import SpoptError
+from ...global_definitions import FieldNames
 from ...utils.misc_utils import wrap_in_html_tag
 from ...utils.resource_utils import get_icon
+from ..processing_definitions import HELP_DIR
 
 
-class SPOPTBaseAlgorithm(QgsProcessingAlgorithm):
-    """The base class for the spatial optimization problems implemented in Pysal's Spopt package."""
+class SpoptBaseAlgorithm(QgsProcessingAlgorithm):
+    """
+    Base for the pysal/spopt location problems. Takes a cost matrix layer as produced by the
+    matrix algorithms (facilities = sources, demand points = targets), solves it out of process
+    (core/spopt) and joins the result back onto the facility & demand point layers.
 
-    METRICS = (FieldNames.DURATION, FieldNames.DISTANCE)
+    Subclasses set PROBLEM and add their parameters via init_problem_params/get_problem_kwargs.
+    """
 
-    IN_MATRIX_SOURCE = "INPUT_MATRIX_LAYER"
-    IN_FAC_SOURCE = "INPUT_FAC_LAYER"
-    IN_FAC_ID = "INPUT_FAC_ID"
-    IN_PREDEFINED_FAC_FIELD = (
-        "INPUT_PREDEFINED_FAC_FIELD"  # TODO: rename proc params for user friendliness
-    )
-    IN_DEM_SOURCE = "INPUT_DEM_POINT_LAYER"
-    IN_DEM_ID = "INPUT_DEM_ID"
-    IN_DEM_WEIGHTS = "INPUT_DEM_WEIGHTS"
-    IN_SERVICE_RADIUS = "INPUT_SERVICE_RADIUS"
-    IN_N_FAC = "INPUT_N_FAC"
+    PROBLEM: SpoptProblem
 
+    IN_MATRIX = "INPUT_MATRIX_LAYER"
     IN_METRIC = "INPUT_METRIC"
+    IN_FAC = "INPUT_FAC_LAYER"
+    IN_FAC_ID = "INPUT_FAC_ID"
+    IN_DEM = "INPUT_DEM_POINT_LAYER"
+    IN_DEM_ID = "INPUT_DEM_ID"
     IN_LINES = "INPUT_LINES"
 
     OUT_FAC = "OUTPUT_FAC"
     OUT_DEM = "OUTPUT_DEM"
 
-    GROUP_NAME = "Spatial Optimization"
+    METRICS = (FieldNames.DURATION, FieldNames.DISTANCE)
 
-    def __init__(self, problem_type: SpOptTypes):
-        super(SPOPTBaseAlgorithm, self).__init__()
-        self.problem_type = problem_type  # dictates parameters and processAlgorithm method
+    def tr(self, string):
+        return QCoreApplication.translate("Processing", string)
 
     def initAlgorithm(self, configuration, p_str=None, Any=None, *args, **kwargs):
-        """Here, we use the spopt type to infer the allowed parameters."""
         self.addParameter(
             QgsProcessingParameterFeatureSource(
-                name=self.IN_MATRIX_SOURCE,
-                description=f"{wrap_in_html_tag('Origin Destination Matrix', 'b')}. "
-                "The Origin-Destination Matrix as a table layer.",
+                name=self.IN_MATRIX,
+                description=f"{wrap_in_html_tag('Cost matrix', 'b')}. "
+                "Output of a matrix algorithm with facilities as sources and demand points as targets",
                 types=[QgsProcessing.SourceType.TypeVector],
             )
         )
-        if self.problem_type in (SpOptTypes.LSCP, SpOptTypes.MCLP):
-            self.addParameter(
-                QgsProcessingParameterNumber(
-                    name=self.IN_SERVICE_RADIUS,
-                    description="Service Radius",
-                    type=QgsProcessingParameterNumber.Type.Double,
-                    minValue=0,
-                )
-            )
-
-        self.addParameter(
-            QgsProcessingParameterFeatureSource(
-                name=self.IN_FAC_SOURCE,
-                description="The candidate facilities layer.",
-                types=[QgsProcessing.SourceType.TypeVectorPoint],
-                optional=True,
-            )
-        )
-
-        self.addParameter(
-            QgsProcessingParameterField(
-                name=self.IN_FAC_ID,
-                description="Facility layer ID field.",
-                parentLayerParameterName=self.IN_FAC_SOURCE,
-                optional=True,
-            )
-        )
-        if self.problem_type in (SpOptTypes.LSCP, SpOptTypes.MCLP):
-            self.addParameter(
-                QgsProcessingParameterField(
-                    name=self.IN_PREDEFINED_FAC_FIELD,
-                    description="Facility layer field indicating if a facility will be used definitively.",
-                    parentLayerParameterName=self.IN_FAC_SOURCE,
-                    optional=True,
-                    type=QgsProcessingParameterField.DataType.Numeric,
-                )
-            )
-
-        self.addParameter(
-            QgsProcessingParameterFeatureSource(
-                name=self.IN_DEM_SOURCE,
-                description="The demand points layer.",
-                types=[QgsProcessing.SourceType.TypeVectorPoint],
-                optional=True,
-            )
-        )
-
-        self.addParameter(
-            QgsProcessingParameterField(
-                name=self.IN_DEM_ID,
-                description="Demand points layer ID field.",
-                parentLayerParameterName=self.IN_DEM_SOURCE,
-                optional=True,
-            )
-        )
-
-        if self.problem_type in (SpOptTypes.MCLP, SpOptTypes.PMEDIAN):
-            self.addParameter(
-                QgsProcessingParameterField(
-                    name=self.IN_DEM_WEIGHTS,
-                    description="Demand point weights",
-                    parentLayerParameterName=self.IN_DEM_SOURCE,
-                    optional=True,
-                    type=QgsProcessingParameterField.DataType.Numeric,
-                )
-            )
-
-        if self.problem_type != SpOptTypes.LSCP:
-            self.addParameter(
-                QgsProcessingParameterNumber(
-                    name=self.IN_N_FAC,
-                    description="Number of facilities to be sited",
-                    type=QgsProcessingParameterNumber.Type.Integer,
-                    minValue=1,
-                    defaultValue=1,
-                )
-            )
-
         metric_param = QgsProcessingParameterEnum(
             name=self.IN_METRIC,
-            description="The metric to use as basis for the optimization",
-            options=self.METRICS,
-            defaultValue=FieldNames.DURATION,
+            description="Cost metric to optimize for (duration in seconds, distance in meters)",
+            options=[m.value for m in self.METRICS],
+            defaultValue=0,
         )
-        # We assume users are more interested in the durations than the distances, so we hide this option in the advanced section
-        metric_param.setFlags(QgsProcessingParameterDefinition.Flag.FlagAdvanced)
-
+        metric_param.setFlags(metric_param.flags() | QgsProcessingParameterDefinition.Flag.FlagAdvanced)
         self.addParameter(metric_param)
+
+        for layer_name, field_name, what in (
+            (self.IN_FAC, self.IN_FAC_ID, "Facility"),
+            (self.IN_DEM, self.IN_DEM_ID, "Demand point"),
+        ):
+            self.addParameter(
+                QgsProcessingParameterFeatureSource(
+                    name=layer_name,
+                    description=f"{what} layer, as used for the matrix",
+                    types=[QgsProcessing.SourceType.TypeVectorPoint],
+                )
+            )
+            self.addParameter(
+                QgsProcessingParameterField(
+                    name=field_name,
+                    description=f"{what} ID field, as used for the matrix (feature IDs if empty)",
+                    parentLayerParameterName=layer_name,
+                    optional=True,
+                )
+            )
+
+        # after the layers: problem params may be fields of them
+        self.init_problem_params()
 
         lines_param = QgsProcessingParameterBoolean(
             name=self.IN_LINES,
-            description="Draw lines connecting demand points and their respective facilities",
+            description="Draw lines from demand points to their facilities",
             defaultValue=False,
         )
-
         lines_param.setFlags(lines_param.flags() | QgsProcessingParameterDefinition.Flag.FlagAdvanced)
         self.addParameter(lines_param)
 
-        # Only output facilities that are actually selected
         self.addParameter(
             QgsProcessingParameterFeatureSink(
-                name=self.OUT_FAC,
-                description="Selected facilities",
-                createByDefault=True,
+                name=self.OUT_FAC, description=f"{self.name()}_facilities", createByDefault=True
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterFeatureSink(
+                name=self.OUT_DEM, description=f"{self.name()}_demand", createByDefault=True
             )
         )
 
-        self.addParameter(
-            QgsProcessingParameterFeatureSink(
-                name=self.OUT_DEM, description="Demand points", createByDefault=True
-            )
-        )
+    def init_problem_params(self) -> None:
+        """Adds the problem-specific parameters."""
+        raise NotImplementedError
 
-    def processAlgorithm(self, parameters, context, feedback):  # noqa: C901
+    def get_problem_kwargs(
+        self,
+        parameters,
+        context,
+        fac_ids: List[Any],
+        dem_ids: List[Any],
+        fac_feats: Dict[Any, QgsFeature],
+        dem_feats: Dict[Any, QgsFeature],
+    ) -> Dict[str, Any]:
+        """The problem-specific kwargs for core.spopt.solve(), per-feature values in matrix order."""
+        raise NotImplementedError
+
+    def processAlgorithm(  # noqa: C901
+        self, parameters, context: QgsProcessingContext, feedback: QgsProcessingFeedback
+    ):
+        matrix = self.parameterAsSource(parameters, self.IN_MATRIX, context)
+        metric = self.METRICS[self.parameterAsEnum(parameters, self.IN_METRIC, context)]
+        draw_lines = self.parameterAsBoolean(parameters, self.IN_LINES, context)
+
+        # layer_ids are the same order as in the feature
+        fac_layer_ids, dem_layer_ids, cost_matrix = self._read_matrix(matrix, metric)
+
+        fac_source = self.parameterAsSource(parameters, self.IN_FAC, context)
+        dem_source = self.parameterAsSource(parameters, self.IN_DEM, context)
+        for source, param_name in ((fac_source, self.IN_FAC), (dem_source, self.IN_DEM)):
+            if source is None:
+                raise QgsProcessingException(self.invalidSourceError(parameters, param_name))
+
+        fac_id_field = self.parameterAsString(parameters, self.IN_FAC_ID, context)
+        fac_feats = self._index_features(fac_source, fac_id_field, fac_layer_ids, "facility")
+        dem_id_field = self.parameterAsString(parameters, self.IN_DEM_ID, context)
+        dem_feats = self._index_features(dem_source, dem_id_field, dem_layer_ids, "demand point")
+        feedback.setProgress(20)
 
         try:
-            import numpy as np
-            from pulp import PULP_CBC_CMD
-
-            if self.problem_type == SpOptTypes.LSCP:
-                from spopt.locate import LSCP
-            if self.problem_type == SpOptTypes.MCLP:
-                from spopt.locate import MCLP
-            if self.problem_type == SpOptTypes.PCENTER:
-                from spopt.locate import PCenter
-            if self.problem_type == SpOptTypes.PMEDIAN:
-                from spopt.locate import PMedian
-
-        except ImportError as e:
-            raise QgsProcessingException(
-                self.tr(
-                    f"Failed to import library {e.name}. Please open the Valhalla Settings to help you install this package via PyPI."
-                )
+            fac2cli = spopt.solve(
+                self.PROBLEM,
+                cost_matrix,
+                is_canceled=feedback.isCanceled,
+                **self.get_problem_kwargs(
+                    parameters, context, fac_layer_ids, dem_layer_ids, fac_feats, dem_feats
+                ),
             )
+        except SpoptError as e:
+            feedback.pushDebugInfo(e.detail)
+            raise QgsProcessingException(str(e))
+        if fac2cli is None:  # canceled
+            return {}
+        feedback.setProgress(90)
 
-        # initialize variables that don't exist across all algorithms
-        fac_predefined_field: Optional[str] = None
-        dem_weight_field: Optional[str] = None
-        service_radius: Optional[float] = None
-        n_fac: Optional[int] = None
+        # both outputs carry the input attributes, followed by the result's
 
-        # Get the parameters that can be specified for all spopt types
-        od_matrix: QgsProcessingFeatureSource = self.parameterAsSource(
-            parameters, self.IN_MATRIX_SOURCE, context
-        )
-        fac_source: QgsProcessingFeatureSource = self.parameterAsSource(
-            parameters, self.IN_FAC_SOURCE, context
-        )
-        fac_id_field: Optional[str] = self.parameterAsString(parameters, self.IN_FAC_ID, context)
-        dem_source: QgsProcessingFeatureSource = self.parameterAsSource(
-            parameters, self.IN_DEM_SOURCE, context
-        )
-        dem_id_field: Optional[str] = self.parameterAsString(parameters, self.IN_DEM_ID, context)
-
-        metric: str = self.METRICS[self.parameterAsEnum(parameters, self.IN_METRIC, context)]
-
-        draw_lines: bool = self.parameterAsBool(parameters, self.IN_LINES, context)
-
-        # And here we get the params specific to some, but not all spopt types
-        if self.problem_type in (SpOptTypes.LSCP, SpOptTypes.MCLP):
-            fac_predefined_field = self.parameterAsString(
-                parameters, self.IN_PREDEFINED_FAC_FIELD, context
-            )
-            service_radius = self.parameterAsDouble(parameters, self.IN_SERVICE_RADIUS, context)
-
-        if self.problem_type in (SpOptTypes.MCLP, SpOptTypes.PMEDIAN):
-            dem_weight_field = self.parameterAsString(parameters, self.IN_DEM_WEIGHTS, context)
-
-        if self.problem_type != SpOptTypes.LSCP:
-            n_fac = self.parameterAsInt(parameters, self.IN_N_FAC, context)
-
-        # build the return fields and get the feature sinks
-        fac_return_fields = QgsFields()
-        fac_id_type = (  # we pass the type of the ID field on if it's specified by the user
-            fac_source.fields().field(fac_id_field).type() if fac_id_field else QVariant.Int
-        )
-        fac_fields = [QgsField(FieldNames.ID, fac_id_type)]
-
-        if fac_predefined_field:
-            fac_fields.append(
-                QgsField("predefined", QVariant.Int)
-            )  # we pass the predefined field on if specified
-        for field in fac_fields:
-            fac_return_fields.append(field)
-
-        dem_id_type = (  # we pass the type of the ID field on if it's specified by the user
-            dem_source.fields().field(dem_id_field).type() if dem_id_field else QVariant.Int
-        )
-        dem_return_fields = QgsFields()
-        _ = [
-            dem_return_fields.append(f)
-            for f in (
-                QgsField(FieldNames.ID, dem_id_type),
-                QgsField(FieldNames.FACILITY_ID, fac_id_type),
-            )
-        ]
-
-        if dem_weight_field:  # pass the weight field on if specified
-            dem_return_fields.append(QgsField(FieldNames.WEIGHT, QVariant.Double))
-
+        # facilities output: the selected ones only, with the number of demand points they cover
+        fac_result_fields = QgsFields()
+        fac_result_fields.append(QgsField(FieldNames.DEMAND_COUNT, QVariant.Int))
+        fac_fields, fac_copied_idx = self._output_fields(fac_source, fac_result_fields)
         fac_sink, fac_dest_id = self.parameterAsSink(
-            parameters,
-            self.OUT_FAC,
-            context,
-            fac_return_fields,
-            (
-                fac_source.wkbType() if fac_id_field else QgsWkbTypes.Type.NoGeometry
-            ),  # if there's an ID field, we retrieve the original geometry
-            fac_source.sourceCrs() if fac_source and fac_id_field else WGS84,
+            parameters, self.OUT_FAC, context, fac_fields, fac_source.wkbType(), fac_source.sourceCrs()
         )
 
-        dem_geom_type = QgsWkbTypes.Type.NoGeometry
-
-        if dem_id_field:
-            dem_geom_type = dem_source.wkbType()
-
-        if draw_lines:
-            dem_geom_type = QgsWkbTypes.Type.LineString
-            if not dem_id_field and not fac_id_field:
-                raise QgsProcessingException(
-                    "No connecting lines can be drawn if facility and demand point ID fields are not specified."
-                )
-
+        # demand output: one feature per (facility, demand point) with its cost, coverage
+        # problems may assign a demand point to several facilities
+        dem_result_fields = QgsFields()
+        dem_result_fields.append(self._id_field(FieldNames.FACILITY_ID, fac_source, fac_id_field))
+        dem_result_fields.append(QgsField(metric.value, QVariant.Double))
+        dem_fields, dem_copied_idx = self._output_fields(dem_source, dem_result_fields)
+        dem_geom_type = QgsWkbTypes.Type.LineString if draw_lines else dem_source.wkbType()
+        dem_crs = dem_source.sourceCrs()
         dem_sink, dem_dest_id = self.parameterAsSink(
-            parameters,
-            self.OUT_DEM,
-            context,
-            dem_return_fields,
-            dem_geom_type,
-            dem_source.sourceCrs() if dem_source and dem_id_field else WGS84,
+            parameters, self.OUT_DEM, context, dem_fields, dem_geom_type, dem_crs
         )
 
-        spopt_in_matrix = []
-
-        # get the unique sorted source and target ids from the matrix
-        unique_source_ids = sorted(od_matrix.uniqueValues(od_matrix.fields().indexOf(FieldNames.SOURCE)))
-        unique_target_ids = sorted(od_matrix.uniqueValues(od_matrix.fields().indexOf(FieldNames.TARGET)))
-
-        if n_fac:
-            if len(unique_target_ids) < n_fac:
-                raise QgsProcessingException(
-                    f"Cannot site {n_fac} facilities, since there are only {len(unique_target_ids)} available."
-                )
-
-        # we build the input matrix for the SPOPT classes' from_cost_matrix methods
-        for target_id in unique_target_ids:
-            # for each target (demand point), we add an empty array to our matrix and populate it with
-            # the metric [duration/distance] to each source (facility)
-            spopt_in_matrix.append([])
-            exp = QgsExpression(
-                self.get_expression_template(dem_id_type).format(
-                    field=FieldNames.TARGET, value=target_id
-                )
+        # the facility end of the lines, already in the demand points' CRS
+        fac_points = dict()
+        if draw_lines:
+            transform = QgsCoordinateTransform(
+                fac_source.sourceCrs(), dem_crs, context.transformContext()
             )
-            req = QgsFeatureRequest(exp)
-            req.addOrderBy(FieldNames.SOURCE, ascending=True)
-            for fac_feat in od_matrix.getFeatures(req):
-                spopt_in_matrix[-1].append(fac_feat[metric])
-        spopt_in_matrix = np.array(spopt_in_matrix)
+            fac_points = {i: transform.transform(f.geometry().asPoint()) for i, f in fac_feats.items()}
 
-        predefined_arr = []
-        if self.problem_type in (SpOptTypes.LSCP, SpOptTypes.MCLP):
-            if fac_predefined_field:
-                if not dem_id_field:
-                    raise QgsProcessingException(
-                        "The predefined field can not be used if no id field is specified for the demand points."
-                    )
-                req = QgsFeatureRequest()
-                req.addOrderBy(fac_id_field)
-                for fac_feat in fac_source.getFeatures(req):
-                    predefined_arr.append(fac_feat[fac_predefined_field])
+        for fac_idx, demand_pts in enumerate(fac2cli):
+            if demand_pts is None:  # not selected
+                continue
+            # add facility feature
+            fac_id = fac_layer_ids[fac_idx]
+            fac_feat = QgsFeature(fac_fields)
+            fac_attrs = fac_feats[fac_id].attributes()
+            fac_feat.setAttributes([fac_attrs[i] for i in fac_copied_idx] + [len(demand_pts)])
+            fac_feat.setGeometry(fac_feats[fac_id].geometry())
+            fac_sink.addFeature(fac_feat)
 
-        predefined_arr = (
-            np.array(predefined_arr) if predefined_arr else None
-        )  # need to convert to numpy array for spopt
-
-        weights_arr = []
-        if self.problem_type in (SpOptTypes.MCLP, SpOptTypes.PMEDIAN):
-            if dem_weight_field:
-                if not dem_id_field:
-                    raise QgsProcessingException(
-                        "The weight field can not be used if no id field is specified for the demand points."
-                    )
-                req = QgsFeatureRequest()
-                req.addOrderBy(dem_id_field)
-                for dem_feat in dem_source.getFeatures(req):
-                    weights_arr.append(dem_feat[dem_weight_field])
-            weights_arr = (
-                np.array(weights_arr) if len(weights_arr) > 0 else [1 for i in spopt_in_matrix]
-            )  # assign uniform weights if no weights are specified
-
-        try:
-            if self.problem_type == SpOptTypes.LSCP:
-                problem = LSCP.from_cost_matrix(
-                    spopt_in_matrix,
-                    service_radius=service_radius,
-                    predefined_facilities_arr=predefined_arr,
+            # for each demand point, add a demand point feature
+            for dem_idx in demand_pts:
+                dem_id = dem_layer_ids[dem_idx]
+                dem_feat = QgsFeature(dem_fields)
+                dem_attrs = dem_feats[dem_id].attributes()
+                dem_feat.setAttributes(
+                    [dem_attrs[i] for i in dem_copied_idx] + [fac_id, cost_matrix[dem_idx][fac_idx]]
                 )
-            if self.problem_type == SpOptTypes.MCLP:
-                problem = MCLP.from_cost_matrix(
-                    spopt_in_matrix,
-                    weights=weights_arr,
-                    service_radius=service_radius,
-                    p_facilities=n_fac,
-                    predefined_facilities_arr=predefined_arr,
-                )
-            if self.problem_type == SpOptTypes.PCENTER:
-                problem = PCenter.from_cost_matrix(spopt_in_matrix, p_facilities=n_fac)
-            if self.problem_type == SpOptTypes.PMEDIAN:
-                problem = PMedian.from_cost_matrix(
-                    spopt_in_matrix,
-                    weights=weights_arr,
-                    p_facilities=n_fac,
-                )
-
-            problem.solve(PULP_CBC_CMD(msg=False))
-
-        except RuntimeError as e:
-            raise QgsProcessingException(f"Could not solve {self.NAME}: {e}")
-
-        problem.client_facility_array()  # this creates the fac2cli attribute
-
-        for fac_i in range(len(problem.fac2cli)):
-            # now we join the optimization result with the input IDs from the OD matrix using the indices
-            if len(problem.fac2cli[fac_i]) > 0:
-                fac_feat = QgsFeature()
-                fac_feat.setFields(fac_return_fields)
-                fac_id = unique_source_ids[fac_i]
-                fac_feat[FieldNames.ID] = fac_id
-                if fac_predefined_field:  # join the predefined field if provided
-                    fac_feat[FieldNames.PREDEFINED] = int(predefined_arr[fac_i])
-                if fac_id_field:
-                    # if the ID field for the facilities layer was provided, we use it to also
-                    # pass through the geometry
-                    exp = QgsExpression(
-                        self.get_expression_template(fac_id_type).format(
-                            field=fac_id_field, value=fac_id
-                        )
-                    )
-                    req = QgsFeatureRequest(exp)
-                    geom = [f for f in fac_source.getFeatures(req)][0].geometry()
-                    fac_feat.setGeometry(geom)
-                fac_sink.addFeature(fac_feat)
-                for dem_i in range(len(problem.fac2cli[fac_i])):
-                    #  same for the demand points: join using indices, pass the ID and the corresponding facility ID
-                    dem_feat = QgsFeature()
-                    dem_feat.setFields(dem_return_fields)
-                    dem_id = unique_target_ids[problem.fac2cli[fac_i][dem_i]]
-                    dem_feat[FieldNames.ID] = dem_id
-                    dem_feat[FieldNames.FACILITY_ID] = unique_source_ids[fac_i]
-                    if (
-                        dem_id_field
-                    ):  # and pass through the original geometry via joining with the provided ID field
-                        exp = QgsExpression(
-                            self.get_expression_template(dem_id_type).format(
-                                field=dem_id_field, value=dem_id
-                            )
-                        )
-                        req = QgsFeatureRequest(exp)
-                        dem_source_feat = [f for f in dem_source.getFeatures(req)][0]
-                        if not draw_lines:
-                            dem_geom = dem_source_feat.geometry()
-                            dem_feat.setGeometry(dem_geom)
-                        elif draw_lines:
-                            dem_geom = QgsPoint(dem_source_feat.geometry().asPoint())
-                            fac_geom = QgsPoint(fac_feat.geometry().asPoint())
-                            line_geom = QgsGeometry.fromPolyline([dem_geom, fac_geom])
-                            dem_feat.setGeometry(line_geom)
-                        if dem_weight_field:
-                            dem_feat[FieldNames.WEIGHT] = dem_source_feat[dem_weight_field]
-
-                    dem_sink.addFeature(dem_feat)
+                if draw_lines:
+                    dem_point = dem_feats[dem_id].geometry().asPoint()
+                    dem_feat.setGeometry(QgsGeometry.fromPolylineXY([dem_point, fac_points[fac_id]]))
+                else:
+                    dem_feat.setGeometry(dem_feats[dem_id].geometry())
+                dem_sink.addFeature(dem_feat)
 
         return {self.OUT_FAC: fac_dest_id, self.OUT_DEM: dem_dest_id}
 
-    @classmethod
-    def get_expression_template(cls, value_type: QVariant.Type):
-        """Gets a string for a QgsExpression that either checks value equality quoted or unquoted, depending on the given value type."""
-        return "\"{field}\"='{value}'" if value_type == QVariant.String else '"{field}"={value}'
+    def _read_matrix(
+        self, matrix: QgsFeatureSource, metric: FieldNames
+    ) -> Tuple[List[Any], List[Any], List[List[float]]]:
+        """
+        Reads the matrix table layer as output by the Matrix algorithms.
 
-    def tr(self, string):
+        It returns the layers IDs for facilities (origins) and demands (destinations), and
+        a transposed matrix which is what spopt expects. A missing pair or a NULL cost are
+        modeles as infinity.
         """
-        Returns a translatable string with the self.tr() function.
+        # check we got the fields we expect
+        field_names = matrix.fields().names()
+        if missing := [
+            f for f in (FieldNames.SOURCE, FieldNames.TARGET, metric) if f not in field_names
+        ]:
+            raise QgsProcessingException(
+                f"The cost matrix needs the fields {', '.join(missing)}, use a matrix algorithm's output"
+            )
+
+        # extract the layer ids of both and keep the cost values for later transposition
+        costs: Dict[Tuple[Any, Any], float] = dict()
+        fac_layer_ids: Dict[Any, None] = dict()
+        dem_layer_ids: Dict[Any, None] = dict()
+        for feat in matrix.getFeatures():
+            fac_id, dem_id = feat[FieldNames.SOURCE], feat[FieldNames.TARGET]
+            if (fac_id, dem_id) in costs:
+                # e.g. the ID field used for the matrix wasn't unique
+                raise QgsProcessingException(
+                    f"The cost matrix has more than one row for source {fac_id} and target {dem_id}"
+                )
+            fac_layer_ids[fac_id] = None
+            dem_layer_ids[dem_id] = None
+            try:
+                costs[(fac_id, dem_id)] = float(feat[metric])
+            except (TypeError, ValueError):
+                costs[(fac_id, dem_id)] = math.inf  # NULL
+
+        if not any(math.isfinite(cost) for cost in costs.values()):
+            raise QgsProcessingException("The cost matrix has no valid results")
+
+        # transpose the cost matrix for spopt
+        cost_matrix = [[costs.get((f, d), math.inf) for f in fac_layer_ids] for d in dem_layer_ids]
+
+        return list(fac_layer_ids), list(dem_layer_ids), cost_matrix
+
+    @staticmethod
+    def _index_features(
+        source: QgsFeatureSource, id_field: str, ids: List[Any], what: str
+    ) -> Dict[Any, QgsFeature]:
+        """The layer's features by ID (or feature ID); every matrix ID must be found exactly once."""
+        feats: Dict[Any, QgsFeature] = dict()
+        duplicates = set()
+        for feat in source.getFeatures():
+            feat_id = feat[id_field] if id_field else feat.id()
+            if feat_id in feats:
+                duplicates.add(feat_id)
+            feats[feat_id] = feat
+
+        if ambiguous := [str(i) for i in ids if i in duplicates]:
+            raise QgsProcessingException(
+                f"The {what} layer has several features for the matrix IDs {', '.join(ambiguous[:10])}"
+                f"{' ...' if len(ambiguous) > 10 else ''}. The ID field must be unique."
+            )
+        if missing := [str(i) for i in ids if i not in feats]:
+            raise QgsProcessingException(
+                f"The {what} layer has no features for the matrix IDs {', '.join(missing[:10])}"
+                f"{' ...' if len(missing) > 10 else ''}. Is it the same layer & ID field as for the matrix?"
+            )
+
+        return feats
+
+    @staticmethod
+    def _id_field(name: str, source: QgsFeatureSource, id_field: str) -> QgsField:
+        """An ID field of the same type as the joined layer's ID field, feature IDs are ints."""
+        if id_field:
+            field = QgsField(source.fields().field(id_field))
+            field.setName(name)
+            return field
+
+        return QgsField(name, QVariant.LongLong)
+
+    @staticmethod
+    def _output_fields(
+        source: QgsFeatureSource, result_fields: QgsFields
+    ) -> Tuple[QgsFields, List[int]]:
         """
-        return QCoreApplication.translate("Processing", string)
+        The input fields followed by the result fields, and the indices of the copied input fields.
+
+        The result fields always keep their names, an input field with the same name gets a
+        suffix instead: re-running on a previous result must not leave e.g. "facility_id" with
+        the old values. Without "fid": a GeoPackage's fid must be unique in a GeoPackage output,
+        but demand points repeat.
+        """
+        # field names are case-insensitive in e.g. GeoPackage and Shapefile
+        result_names = {f.name().lower() for f in result_fields}
+        # a renamed field may not take the name of another input field either
+        taken = result_names | {f.name().lower() for f in source.fields()}
+        fields = QgsFields()
+        indices = list()
+        for idx, field in enumerate(source.fields()):
+            if field.name().lower() == "fid":
+                continue
+            field = QgsField(field)
+            if field.name().lower() in result_names:
+                name, n = field.name(), 2
+                while name.lower() in taken:
+                    name, n = f"{field.name()}_{n}", n + 1
+                field.setName(name)
+                taken.add(name.lower())
+            fields.append(field)
+            indices.append(idx)
+
+        # now we can write the result fields
+        for field in result_fields:
+            fields.append(field)
+
+        return fields, indices
 
     def createInstance(self):
         return type(self)()
 
-    def group(self) -> str:
-        return self.GROUP_NAME
+    def group(self):
+        return "Spatial Optimization"
 
     def groupId(self):
-        return self.GROUP_NAME.lower().replace("_", " ")
+        return "valhalla_spatial_optimization"
 
     def icon(self) -> QIcon:
-        return get_icon("icon_matrix.png")
+        return get_icon("matrix_icon.svg")
 
     def name(self):
-        return self.NAME
-
-    def displayName(self):
-        return "Location Set Covering Problem"
+        return self.PROBLEM.value
 
     def shortHelpString(self):
-        """Displays the sidebar help in the algorithm window"""
-
-        file = HELP_DIR / Path(f"{self.NAME}.help")
-
-        with open(file) as fh:
-            msg = fh.read()
-
-        return msg
+        with open(HELP_DIR / Path(f"{self.PROBLEM.value}.help")) as fh:
+            return fh.read()
