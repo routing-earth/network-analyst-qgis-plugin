@@ -1,7 +1,7 @@
 from time import sleep
 
-from qgis.core import Qgis, QgsProject, QgsVectorLayer, QgsWkbTypes
-from qgis.PyQt.QtCore import Qt
+from qgis.core import Qgis, QgsField, QgsProject, QgsVectorLayer, QgsWkbTypes
+from qgis.PyQt.QtCore import Qt, QVariant
 from qgis.PyQt.QtTest import QTest
 
 from ..utilities import get_first_feature_geometry, get_qgis_app
@@ -181,6 +181,53 @@ class TestHttpRouting(LocalhostDockerTestCase):
             abs(geom_no_costing.length() - geom_reset_costing.length()),
             0.000001,
         )
+
+    def test_valhalla_linear_factors(self):
+        """Penalizes the edges of a route and expects the next route to avoid them."""
+        params_widget = self.dlg.routing_params_widget
+        self.hit_execute()
+        layer_no_factors: QgsVectorLayer = list(QgsProject.instance().mapLayers().values())[0]
+        layer_no_factors.setName("no_factors")
+
+        # other numeric fields (duration, distance) are never picked up as the factor
+        params_widget.linear_factors.setLayer(layer_no_factors)
+        self.assertEqual(params_widget.linear_factors_field.currentField(), "")
+        self.assertNotIn("linear_cost_factors", params_widget.get_costing_params())
+
+        # the route is map matched by definition, so give it a factor and use it as input
+        layer_factors = layer_no_factors.clone()
+        layer_factors.setName("factors")
+        layer_factors.dataProvider().addAttributes([QgsField("factor", QVariant.Double)])
+        layer_factors.updateFields()
+        field_idx = layer_factors.fields().indexOf("factor")
+        layer_factors.dataProvider().changeAttributeValues(
+            {feat.id(): {field_idx: 100.0} for feat in layer_factors.getFeatures()}
+        )
+        QgsProject.instance().addMapLayer(layer_factors)
+
+        # a field called "factor" is preselected
+        params_widget.linear_factors.setLayer(layer_factors)
+        self.assertEqual(params_widget.linear_factors_field.currentField(), "factor")
+        linear_cost_factors = params_widget.get_costing_params()["linear_cost_factors"]
+        self.assertEqual(len(linear_cost_factors), 1)
+        self.assertEqual(linear_cost_factors[0]["factor"], 100.0)
+
+        self.hit_execute()
+        layer_with_factors = [
+            lyr
+            for lyr in QgsProject.instance().mapLayers().values()
+            if lyr.name() not in ("no_factors", "factors")
+        ][0]
+        self.assertNotAlmostEqual(
+            get_first_feature_geometry(layer_no_factors).length(),
+            get_first_feature_geometry(layer_with_factors).length(),
+            places=2,
+        )
+
+        # the reset button clears the layer again
+        QTest.mouseClick(params_widget.ui_reset_settings, Qt.MouseButton.LeftButton)
+        self.assertIsNone(params_widget.linear_factors.currentLayer())
+        self.assertNotIn("linear_cost_factors", params_widget.get_costing_params())
 
 
 # class TestSpOpt(unittest.TestCase):

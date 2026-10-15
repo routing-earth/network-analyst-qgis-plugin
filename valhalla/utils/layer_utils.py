@@ -1,5 +1,5 @@
 import json
-from typing import Dict, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from qgis.core import (
     Qgis,
@@ -17,11 +17,13 @@ from qgis.core import (
     QgsSingleSymbolRenderer,
     QgsStyle,
     QgsSymbol,
+    QgsVariantUtils,
     QgsVectorLayer,
     QgsWkbTypes,
 )
 
 from ..global_definitions import RouterEndpoint
+from .geom_utils import encode_polyline6
 from .resource_utils import get_resource_path
 
 COLOR_RAMP: QgsColorRamp = QgsStyle().defaultStyle().colorRamp("GnBu")
@@ -153,6 +155,34 @@ def get_wgs_coords_from_layer(
             _ = [coordinates.append(coord) for coord in coords]
 
     return coordinates
+
+
+def get_linear_cost_factors(
+    layer: Union[QgsVectorLayer, QgsProcessingFeatureSource], factor_field: str
+) -> List[dict]:
+    """
+    Turns the input line layer into Valhalla's linear_cost_factors parameter: one object with a
+    polyline6 encoded "shape" and a "factor" per line (each part of a multi line gets its feature's
+    factor). The geometries must already be map matched. Features without a
+    geometry or without a factor value are skipped.
+
+    :param layer: A QgsVectorLayer or QgsProcessingFeatureSource with (multi) line geometries
+    :param factor_field: The name of the numeric field holding the factor
+    """
+    linear_cost_factors = []
+    crs = layer.sourceCrs()
+
+    for feature in layer.getFeatures():
+        factor = feature[factor_field]
+        if not feature.hasGeometry() or QgsVariantUtils.isNull(factor):
+            continue
+
+        coords = get_wgs_coords_from_feature(feature, crs)
+        lines = coords if QgsWkbTypes.isMultiType(feature.geometry().wkbType()) else [coords]
+        for line in lines:
+            linear_cost_factors.append({"shape": encode_polyline6(line), "factor": float(factor)})
+
+    return linear_cost_factors
 
 
 def post_process_layer(layer: QgsVectorLayer, endpoint: RouterEndpoint) -> None:  # noqa: C901
