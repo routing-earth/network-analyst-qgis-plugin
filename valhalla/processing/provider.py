@@ -27,11 +27,6 @@ from ..processing.routing.valhalla.optimized import (
     ValhallaOptimizedDirectionsPedestrian,
     ValhallaOptimizedDirectionsTruck,
 )
-
-# from valhalla.processing.spatial_optimization.lscp import LSCPAlgorithm
-# from valhalla.processing.spatial_optimization.mclp import MCLPAlgorithm
-# from valhalla.processing.spatial_optimization.pcenter import PCenterAlgorithm
-# from valhalla.processing.spatial_optimization.pmedian import PMedianAlgorithm
 from ..utils.resource_utils import get_icon
 from .routing.valhalla.directions import (
     ValhallaDirectionsBicycle,
@@ -57,6 +52,8 @@ from .routing.valhalla.mapmatch import (
     ValhallaMapMatchPedestrian,
     ValhallaMapMatchTruck,
 )
+from .spatial_optimization.lscp import LSCPAlgorithm
+from .spatial_optimization.mclp import MCLPAlgorithm
 
 
 class ValhallaProvider(QgsProcessingProvider):
@@ -104,6 +101,8 @@ class ValhallaProvider(QgsProcessingProvider):
                     ValhallaMapMatchPedestrian,
                     ValhallaMapMatchBicycle,
                     ValhallaMapMatchBus,
+                    LSCPAlgorithm,
+                    MCLPAlgorithm,
                 )
             ],
         ]

@@ -75,6 +75,7 @@ class FieldNames(str, Enum):
     ID = "id"
     LOCATION_ID = "location_id"  # expansion endpoint
     FACILITY_ID = "facility_id"
+    DEMAND_COUNT = "demand_count"
     SOURCE = "source"
     TARGET = "target"
     PROVIDER = "provider"
@@ -167,10 +168,3 @@ SETTINGS_WIDGETS_MAP = {
         "ui_name": "settings_valhalla_bus",
     },
 }
-
-
-class SpOptTypes(str, Enum):
-    LSCP = "lscp"
-    MCLP = "mclp"
-    PCENTER = "pcenter"
-    PMEDIAN = "pmedian"
