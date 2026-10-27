@@ -1,8 +1,12 @@
 from qgis.core import (
+    QgsFeature,
+    QgsField,
     QgsProcessingContext,
     QgsProcessingException,
     QgsProcessingFeedback,
+    QgsVectorLayer,
 )
+from qgis.PyQt.QtCore import QVariant
 
 from ....utilities import get_qgis_app
 from ...test_processing.processing_base import ProcessingBase
@@ -57,6 +61,38 @@ class TestValhallaDirections(ProcessingBase):
 
         # TODO: this doesn't actually test anything
         self.assertEqual(len(feats), 1)
+
+    def test_linear_factors(self):
+        # two routes with two waypoints each: a route with more waypoints isn't a valid input, as
+        # Valhalla can't edge walk its merged legs
+        alg = ValhallaDirectionsPedestrian()
+        feats, _ = self.run_routing_algorithm(alg, {"INPUT_LAYER_1": self.layer_mp})
+
+        # the routes are map matched by definition, so penalize them and route again
+        factor_layer = QgsVectorLayer("LineString?crs=EPSG:4326", "layer_linear_factors", "memory")
+        factor_layer.dataProvider().addAttributes([QgsField("factor", QVariant.Double)])
+        factor_layer.updateFields()
+        for route in feats:
+            feat = QgsFeature(factor_layer.fields())
+            feat.setGeometry(route.geometry())
+            feat["factor"] = 100.0
+            factor_layer.dataProvider().addFeature(feat)
+
+        params = {
+            "INPUT_LAYER_1": self.layer_mp,
+            "INPUT_LINEAR_FACTORS": factor_layer,
+            "INPUT_LINEAR_FACTORS_FIELD": "factor",
+        }
+        feats_factored, _ = self.run_routing_algorithm(alg, params)
+
+        self.assertEqual(len(feats_factored), 2)
+        for route, route_factored in zip(feats, feats_factored):
+            self.assertGreater(route_factored[FieldNames.DISTANCE], route[FieldNames.DISTANCE])
+
+        # the factor field is mandatory once there's a layer
+        del params["INPUT_LINEAR_FACTORS_FIELD"]
+        with self.assertRaises(QgsProcessingException):
+            self.run_routing_algorithm(alg, params)
 
     def test_multi_point(self):
         params = {"INPUT_LAYER_1": self.layer_mp}

@@ -262,6 +262,63 @@
     </widget>
    </item>
    <item>
+    <widget class="QgsCollapsibleGroupBox" name="linear_factors_box">
+     <property name="toolTip">
+      <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Multiplies the cost of the edges along the given lines by a factor (&lt;span style=&quot; font-family:'.SF NS Mono';&quot;&gt;linear_cost_factors&lt;/span&gt;). The lines &lt;span style=&quot; font-weight:600;&quot;&gt;must&lt;/span&gt; already be map matched to the routing graph.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+     </property>
+     <property name="title">
+      <string>Linear Factors</string>
+     </property>
+     <property name="collapsed">
+      <bool>true</bool>
+     </property>
+     <layout class="QFormLayout" name="formLayout_6">
+      <property name="leftMargin">
+       <number>7</number>
+      </property>
+      <property name="topMargin">
+       <number>7</number>
+      </property>
+      <property name="rightMargin">
+       <number>0</number>
+      </property>
+      <property name="bottomMargin">
+       <number>7</number>
+      </property>
+      <item row="0" column="0">
+       <widget class="QLabel" name="linear_factors_label">
+        <property name="toolTip">
+         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;A line layer whose features are already map matched to the routing graph. The request fails if Valhalla can't walk a line along its edges.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+        </property>
+        <property name="text">
+         <string>Map matched lines</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QgsMapLayerComboBox" name="linear_factors">
+        <property name="allowEmptyLayer">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="linear_factors_field_label">
+        <property name="toolTip">
+         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;The numeric attribute holding each line's factor. Features without a value are skipped.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+        </property>
+        <property name="text">
+         <string>Factor field</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QgsFieldComboBox" name="linear_factors_field"/>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
     <widget class="QgsCollapsibleGroupBox" name="ui_metric_box">
      <property name="toolTip">
       <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;If shortest is selected, Valhalla will solely use distance as cost and disregard all other costs, penalties and factors.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
@@ -347,6 +404,11 @@
    <class>QgsDateTimeEdit</class>
    <extends>QDateTimeEdit</extends>
    <header>qgsdatetimeedit.h</header>
+  </customwidget>
+  <customwidget>
+   <class>QgsFieldComboBox</class>
+   <extends>QComboBox</extends>
+   <header>qgsfieldcombobox.h</header>
   </customwidget>
   <customwidget>
    <class>QgsMapLayerComboBox</class>
